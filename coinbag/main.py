@@ -55,6 +55,18 @@ def report(st: dict, status: str, detail: str = ""):
 
 
 # ---------- BLE ----------
+def pick_adapter() -> str:
+    """ADAPTER option: 'auto' uses the highest-numbered adapter (a newly plugged USB dongle becomes hci1), else the named one."""
+    want = os.environ.get("ADAPTER", "auto").strip()
+    if want and want != "auto":
+        return want
+    try:
+        hci = sorted((d for d in os.listdir("/sys/class/bluetooth") if d.startswith("hci") and ":" not in d), key=lambda d: int(d[3:]))
+        return hci[-1] if hci else "hci0"
+    except Exception:
+        return "hci0"
+
+
 async def wait_for_phone(st):
     """Scan without a BlueZ filter (more reliable) and match the Pokémon GO service ourselves.
     Every 15 s the sensor shows how many BLE devices were heard, so we can tell whether scanning works at all."""
@@ -66,7 +78,9 @@ async def wait_for_phone(st):
             found.append(device)
             ev.set()
 
-    async with BleakScanner(cb):
+    adapter = pick_adapter()
+    log.info("scanning with adapter %s", adapter)
+    async with BleakScanner(cb, adapter=adapter):
         while not ev.is_set():
             try:
                 await asyncio.wait_for(ev.wait(), 15)
