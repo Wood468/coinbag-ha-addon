@@ -156,9 +156,26 @@ async def handle(device, st):
         raise RuntimeError(f"Unsupported mode 0x{mode[0]:02x}")
 
 
+async def bluez_diag(st):
+    """Log what BlueZ itself reports, so a deaf or missing adapter is obvious."""
+    out = {}
+    for name, args in (("show", ["show"]), ("devices", ["devices"])):
+        try:
+            p = await asyncio.create_subprocess_exec("bluetoothctl", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+            raw, _ = await asyncio.wait_for(p.communicate(), 10)
+            out[name] = raw.decode(errors="replace").strip()
+        except Exception as e:
+            out[name] = f"unavailable: {e}"
+    log.info("bluetoothctl show:\n%s", out["show"])
+    log.info("bluetoothctl devices (BlueZ cache):\n%s", out["devices"] or "(none)")
+    keep = [l.strip() for l in out["show"].splitlines() if any(k in l for k in ("Controller", "Powered", "Discovering", "Roles"))]
+    ha_set("sensor.coinbag_status", "starting", {"friendly_name": "Coin Bag status", "bluez": keep, "bluez_cached_devices": len([l for l in out["devices"].splitlines() if l.startswith("Device")])})
+
+
 async def main():
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
     st = load_state()
+    await bluez_diag(st)
     report(st, "scanning")
     while True:
         try:
