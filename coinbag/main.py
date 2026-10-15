@@ -55,16 +55,27 @@ def report(st: dict, status: str, detail: str = ""):
 
 
 # ---------- BLE ----------
-async def wait_for_phone():
-    found, ev = [], asyncio.Event()
+async def wait_for_phone(st):
+    """Scan without a BlueZ filter (more reliable) and match the Pokémon GO service ourselves.
+    Every 15 s the sensor shows how many BLE devices were heard, so we can tell whether scanning works at all."""
+    found, ev, seen = [], asyncio.Event(), {}
 
     def cb(device, adv):
+        seen[device.address] = (adv.local_name or device.name or "", adv.rssi)
         if ADV in [u.lower() for u in (adv.service_uuids or [])] and not found:
             found.append(device)
             ev.set()
 
-    async with BleakScanner(cb, service_uuids=[ADV]):
-        await ev.wait()
+    async with BleakScanner(cb):
+        while not ev.is_set():
+            try:
+                await asyncio.wait_for(ev.wait(), 15)
+            except asyncio.TimeoutError:
+                names = sorted({n for n, _ in seen.values() if n})[:10]
+                log.info("scanning: %d BLE devices heard in the last 15 s (%s)", len(seen), ", ".join(names))
+                ha_set("sensor.coinbag_status", "scanning", {"friendly_name": "Coin Bag status", "icon": "mdi:bluetooth-connect",
+                       "ble_devices_heard": len(seen), "named_devices": names})
+                seen.clear()
     return found[0]
 
 
@@ -152,7 +163,7 @@ async def main():
     while True:
         try:
             report(st, "scanning")
-            device = await wait_for_phone()
+            device = await wait_for_phone(st)
             log.info("Pokémon GO found: %s", device.address)
             report(st, "connecting")
             result, name = await handle(device, st)
