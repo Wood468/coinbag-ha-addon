@@ -3,6 +3,8 @@ FROM ${BUILD_FROM}
 RUN apk add --no-cache python3 py3-pip bluez dbus \
  && pip install --no-cache-dir --break-system-packages bleak
 WORKDIR /app
-COPY main.py protocol.py fetch_constants.py run.sh /app/
-RUN python3 fetch_constants.py /app/constants.json && chmod +x run.sh
-CMD ["/app/run.sh"]
+COPY main.py protocol.py fetch_constants.py /app/
+RUN python3 fetch_constants.py /app/constants.json
+# The HA base image runs s6-overlay: the app must be an s6 service, not a CMD.
+COPY run.sh /etc/services.d/coinbag/run
+RUN chmod a+x /etc/services.d/coinbag/run
