@@ -1,0 +1,17 @@
+name: Coin Bag
+version: "0.1.0"
+slug: coinbag
+description: Pairs with Pokémon GO as a Nintendo Switch and receives postcards automatically over Bluetooth.
+url: https://github.com/na-ji/pokemon-go-coin-bag
+arch: [amd64, aarch64]
+startup: application
+boot: auto
+init: false
+host_network: true
+host_dbus: true
+apparmor: false
+homeassistant_api: true
+options:
+  log_level: info
+schema:
+  log_level: list(debug|info|warning)

@@ -1,0 +1,168 @@
+"""Coin Bag for Home Assistant: scans for Pokémon GO's Nintendo Switch pairing advertisement,
+pairs and receives postcards automatically, and reports to HA sensors."""
+import asyncio
+import json
+import logging
+import os
+import time
+import urllib.request
+
+from bleak import BleakClient, BleakScanner
+
+import protocol as P
+
+log = logging.getLogger("coinbag")
+U = P.UUIDS
+ADV = U["advertisementService"].lower()
+STATE_FILE = os.environ.get("COINBAG_STATE", "/data/state.json")
+SUCCESS_DELAY, FAILURE_DELAY, GATT_TIMEOUT, INDICATION_TIMEOUT, SETTLE = 5.0, 3.0, 10.0, 15.0, 0.075
+
+
+# ---------- persistence ----------
+def load_state() -> dict:
+    try:
+        return json.load(open(STATE_FILE))
+    except Exception:
+        return {}
+
+
+def save_state(st: dict):
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    json.dump(st, open(STATE_FILE, "w"))
+
+
+# ---------- Home Assistant reporting (Supervisor proxy) ----------
+def ha_set(entity: str, state, attrs: dict):
+    token = os.environ.get("SUPERVISOR_TOKEN")
+    if not token:
+        return
+    req = urllib.request.Request(
+        f"http://supervisor/core/api/states/{entity}",
+        data=json.dumps({"state": state, "attributes": attrs}).encode(),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=5).read()
+    except Exception as e:  # reporting must never break the loop
+        log.debug("HA report failed: %s", e)
+
+
+def report(st: dict, status: str, detail: str = ""):
+    ha_set("sensor.coinbag_status", status, {"friendly_name": "Coin Bag status", "detail": detail, "icon": "mdi:bluetooth-connect"})
+    ha_set("sensor.coinbag_postcards", st.get("postcards", 0), {
+        "friendly_name": "Coin Bag postcards received", "icon": "mdi:postage-stamp", "state_class": "total_increasing",
+        "last_player": st.get("last_player"), "last_at": st.get("last_at"),
+        "paired_with": st.get("paired", [])})
+
+
+# ---------- BLE ----------
+async def wait_for_phone():
+    found, ev = [], asyncio.Event()
+
+    def cb(device, adv):
+        if ADV in [u.lower() for u in (adv.service_uuids or [])] and not found:
+            found.append(device)
+            ev.set()
+
+    async with BleakScanner(cb, service_uuids=[ADV]):
+        await ev.wait()
+    return found[0]
+
+
+async def read(client, uuid):
+    return bytes(await asyncio.wait_for(client.read_gatt_char(uuid), GATT_TIMEOUT))
+
+
+async def write(client, uuid, value, response):
+    await asyncio.wait_for(client.write_gatt_char(uuid, value, response=response), GATT_TIMEOUT)
+
+
+async def exchange(client, app_id, nonce):
+    # Every indication (DATA or STAGE) lands in one queue: first the send message, then the finalize message.
+    q: asyncio.Queue = asyncio.Queue()
+
+    def on_indication(char, data):
+        q.put_nowait((str(getattr(char, "uuid", char)).lower(), bytes(data)))
+
+    await write(client, U["writeApplicationId"], P.application_id_gatt_value(app_id), True)
+    await write(client, U["writeInitialNonce"], P.initial_nonce_value(nonce), False)
+    await asyncio.wait_for(client.start_notify(U["indicateData"], on_indication), GATT_TIMEOUT)
+
+    _, first = await asyncio.wait_for(q.get(), INDICATION_TIMEOUT)
+    log.info("first indication: %d bytes", len(first))
+    if len(first) < 303:
+        raise RuntimeError(f"First indication is only {len(first)} bytes; the negotiated ATT MTU may be insufficient")
+    send = P.decode_ble_send(first)
+    P.validate_send(send, app_id, nonce)
+    complete = P.encode_complete(send.transaction_id, send.nonce)
+
+    # Finalize arrives on DATA (Android GO) or STAGE (iOS GO): both feed the same queue.
+    await asyncio.wait_for(client.start_notify(U["indicateStage"], on_indication), GATT_TIMEOUT)
+    await write(client, U["writeComplete"], complete, False)
+    try:
+        src, final = await asyncio.wait_for(q.get(), INDICATION_TIMEOUT)
+    except asyncio.TimeoutError:
+        log.warning("Finalize indication timed out. Postcard likely sent.")
+        return
+    log.info("finalize indication on %s (%d bytes)", "STAGE" if src == U["indicateStage"].lower() else "DATA", len(final))
+    await write(client, U["writeFinalNonce"], P.final_nonce_value(nonce), True)
+    P.validate_finalize(P.decode_ble_finalize(final), app_id, nonce)
+
+
+async def handle(device, st):
+    async with BleakClient(device, timeout=GATT_TIMEOUT) as client:
+        log.info("connected to %s, MTU %s", device.address, getattr(client, "mtu_size", "?"))
+        await asyncio.sleep(SETTLE)
+        proto = await read(client, U["readProtocol"])
+        if proto != b"\x01":
+            raise RuntimeError(f"Unsupported protocol value {list(proto)}")
+        name = P.decode_player_name(await read(client, U["readName"]))
+        mode = await read(client, U["readMode"])
+        if len(mode) != 1:
+            raise RuntimeError("Invalid mode characteristic")
+        app_id = st.get("application_id")
+        if not app_id:
+            app_id = st["application_id"] = P.generate_application_id()
+            save_state(st)
+        nonce = P.random_nonce()
+        if mode[0] == 0x00:
+            report(st, "pairing", name)
+            await asyncio.sleep(0.25)
+            await write(client, U["writeApplicationId"], P.application_id_gatt_value(app_id), True)
+            st.setdefault("paired", [])
+            if name not in st["paired"]:
+                st["paired"].append(name)
+            save_state(st)
+            log.info("PAIRED with %s", name)
+            return "paired", name
+        if mode[0] == 0x01:
+            report(st, "exchanging", name)
+            await exchange(client, app_id, nonce)
+            st["postcards"] = st.get("postcards", 0) + 1
+            st["last_player"], st["last_at"] = name, time.strftime("%Y-%m-%dT%H:%M:%S%z")
+            save_state(st)
+            log.info("POSTCARD received from %s (total %d)", name, st["postcards"])
+            return "received", name
+        raise RuntimeError(f"Unsupported mode 0x{mode[0]:02x}")
+
+
+async def main():
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
+    st = load_state()
+    report(st, "scanning")
+    while True:
+        try:
+            report(st, "scanning")
+            device = await wait_for_phone()
+            log.info("Pokémon GO found: %s", device.address)
+            report(st, "connecting")
+            result, name = await handle(device, st)
+            report(st, f"{result}", name)
+            await asyncio.sleep(SUCCESS_DELAY)
+        except Exception as e:
+            log.error("failed: %s", e, exc_info=log.isEnabledFor(logging.DEBUG))
+            report(st, "failed", str(e))
+            await asyncio.sleep(FAILURE_DELAY)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
