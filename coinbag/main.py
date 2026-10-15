@@ -168,6 +168,14 @@ async def bluez_diag(st):
             out[name] = f"unavailable: {e}"
     log.info("bluetoothctl show:\n%s", out["show"])
     log.info("bluetoothctl devices (BlueZ cache):\n%s", out["devices"] or "(none)")
+    try:  # a 12 s active scan straight through BlueZ, independent of bleak
+        p = await asyncio.create_subprocess_exec("bluetoothctl", "--timeout", "12", "scan", "on", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        raw, _ = await asyncio.wait_for(p.communicate(), 25)
+        text = raw.decode(errors="replace")
+        found = sorted({l.split("] ")[-1].strip() for l in text.splitlines() if "NEW" in l and "Device" in l})
+        log.info("bluetoothctl 12 s active scan: %d new devices\n%s", len(found), "\n".join(found[:20]) or text[-600:])
+    except Exception as e:
+        log.info("bluetoothctl scan failed: %s", e)
     keep = [l.strip() for l in out["show"].splitlines() if any(k in l for k in ("Controller", "Powered", "Discovering", "Roles"))]
     ha_set("sensor.coinbag_status", "starting", {"friendly_name": "Coin Bag status", "bluez": keep, "bluez_cached_devices": len([l for l in out["devices"].splitlines() if l.startswith("Device")])})
 
