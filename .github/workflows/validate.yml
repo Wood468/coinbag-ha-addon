@@ -36,3 +36,5 @@ jobs:
           assert "bleak>=2.1.1,<3.0" in Path("coinbag/Dockerfile").read_text()
           print("Add-on configuration checks passed")
           PY
+      - name: Build add-on container
+        run: docker build --pull --tag coinbag-addon:test coinbag
