@@ -103,35 +103,66 @@ async def write(client, uuid, value, response):
 
 
 async def exchange(client, app_id, nonce):
-    # Every indication (DATA or STAGE) lands in one queue: first the send message, then the finalize message.
+    # iOS GO may tear down its GATT table immediately after the finalize indication.
+    # Resolve this characteristic before the exchange and reuse the object for the final write.
+    final_nonce_char = client.services.get_characteristic(U["writeFinalNonce"])
+    if final_nonce_char is None:
+        raise RuntimeError("Final nonce characteristic was not discovered")
+
+    # DATA is used for the first indication and may also carry finalize on Android.
+    # Keep DATA subscribed throughout; iOS finalize arrives on STAGE.
     q: asyncio.Queue = asyncio.Queue()
 
     def on_indication(char, data):
-        q.put_nowait((str(getattr(char, "uuid", char)).lower(), bytes(data)))
+        uuid = str(getattr(char, "uuid", char)).lower()
+        log.debug("indication received on %s (%d bytes)", uuid, len(data))
+        q.put_nowait((uuid, bytes(data)))
 
+    log.info("exchange step: write application ID")
     await write(client, U["writeApplicationId"], P.application_id_gatt_value(app_id), True)
+    log.info("exchange step: write initial nonce")
     await write(client, U["writeInitialNonce"], P.initial_nonce_value(nonce), False)
+    log.info("exchange step: subscribe DATA indications")
     await asyncio.wait_for(client.start_notify(U["indicateData"], on_indication), GATT_TIMEOUT)
 
+    log.info("exchange step: waiting for first DATA indication")
     _, first = await asyncio.wait_for(q.get(), INDICATION_TIMEOUT)
     log.info("first indication: %d bytes", len(first))
     if len(first) < 303:
         raise RuntimeError(f"First indication is only {len(first)} bytes; the negotiated ATT MTU may be insufficient")
+
+    log.info("exchange step: decode and validate first indication")
     send = P.decode_ble_send(first)
     P.validate_send(send, app_id, nonce)
     complete = P.encode_complete(send.transaction_id, send.nonce)
+    log.info("first indication validated; completion payload is %d bytes", len(complete))
 
-    # Finalize arrives on DATA (Android GO) or STAGE (iOS GO): both feed the same queue.
+    log.info("exchange step: subscribe STAGE indications")
     await asyncio.wait_for(client.start_notify(U["indicateStage"], on_indication), GATT_TIMEOUT)
+    log.info("exchange step: write RSA completion")
     await write(client, U["writeComplete"], complete, False)
+    log.info("completion written; waiting for finalize indication")
+
     try:
         src, final = await asyncio.wait_for(q.get(), INDICATION_TIMEOUT)
     except asyncio.TimeoutError:
-        log.warning("Finalize indication timed out. Postcard likely sent.")
-        return
+        log.warning("Finalize indication timed out. Postcard likely sent, but finalization was not confirmed.")
+        return False
+
     log.info("finalize indication on %s (%d bytes)", "STAGE" if src == U["indicateStage"].lower() else "DATA", len(final))
-    await write(client, U["writeFinalNonce"], P.final_nonce_value(nonce), True)
+    log.info("exchange step: validate finalize indication")
     P.validate_finalize(P.decode_ble_finalize(final), app_id, nonce)
+
+    # Upstream iOS implementation tolerates this write failing when GO closes GATT
+    # immediately after finalize. Validate the server finalize first, then attempt the
+    # final nonce write against the pre-resolved characteristic without rediscovery.
+    try:
+        log.info("exchange step: write final nonce")
+        await asyncio.wait_for(client.write_gatt_char(final_nonce_char, P.final_nonce_value(nonce), response=True), GATT_TIMEOUT)
+        log.info("final nonce write acknowledged")
+    except Exception as e:
+        log.warning("final nonce write failed after valid finalize (GO may have closed GATT): %s", e)
+    return True
 
 
 async def handle(device, st):
@@ -224,8 +255,10 @@ async def main():
         except Exception as e:
             log.error("failed: %s", e, exc_info=log.isEnabledFor(logging.DEBUG))
             report(st, "failed", str(e))
-            if device is not None:
-                await forget(device.address)
+            # Do not automatically remove the phone from BlueZ on every failure.
+            # That can discard bond/cache state and trigger repeated iOS pairing prompts.
+            # Keep the device record; stale-service recovery should be an explicit,
+            # targeted diagnostic step rather than a side effect of any exchange error.
             wait = BACKOFF[min(fails, len(BACKOFF) - 1)]
             fails += 1
             log.info("waiting %.0f s before trying again (%d failures in a row)", wait, fails)
