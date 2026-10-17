@@ -26,6 +26,12 @@ class AddonStaticTests(unittest.TestCase):
         self.assertIn('"bleak==2.1.1"', dockerfile)
 
 
+    def test_connect_wait_allows_slow_phone_connection(self):
+        main = (ROOT / "coinbag" / "main.py").read_text()
+        self.assertIn("CONNECT_TIMEOUT = 30.0", main)
+        self.assertIn("BleakClient(device, timeout=CONNECT_TIMEOUT", main)
+        self.assertIn("GATT_TIMEOUT = 10.0", main)
+
     def test_missing_go_protocol_characteristic_removes_only_target_device_record(self):
         main = (ROOT / "coinbag" / "main.py").read_text()
         agent = (ROOT / "coinbag" / "pairing_agent.py").read_text()

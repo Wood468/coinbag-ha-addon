@@ -16,7 +16,9 @@ log = logging.getLogger("coinbag")
 U = P.UUIDS
 ADV = U["advertisementService"].lower()
 STATE_FILE = os.environ.get("COINBAG_STATE", "/data/state.json")
-SUCCESS_DELAY, FAILURE_DELAY, GATT_TIMEOUT, INDICATION_TIMEOUT, SETTLE = 60.0, 3.0, 10.0, 15.0, 0.075
+SUCCESS_DELAY, FAILURE_DELAY, INDICATION_TIMEOUT, SETTLE = 60.0, 3.0, 15.0, 0.075
+GATT_TIMEOUT = 10.0
+CONNECT_TIMEOUT = 30.0
 NOTIFY_MODE = os.environ.get("NOTIFY_MODE", "auto").strip().lower()
 BACKOFF = (3.0, 10.0, 30.0, 60.0)  # seconds to wait after the 1st, 2nd, 3rd, 4th+ failure in a row; stops a pairing-prompt storm on the phone
 
@@ -191,7 +193,7 @@ async def handle(device, st, pairing_agent):
     pairing_agent.set_target_device(device_path)
     log.info("armed scoped Bluetooth pairing agent for %s", device_path)
     try:
-        async with BleakClient(device, timeout=GATT_TIMEOUT, pair=True, disconnected_callback=disconnected) as client:
+        async with BleakClient(device, timeout=CONNECT_TIMEOUT, pair=True, disconnected_callback=disconnected) as client:
             log.info("connected to %s, MTU %s", device.address, getattr(client, "mtu_size", "?"))
             log.debug("GATT service discovery completed; %d services available",
                       len(client.services.services))
