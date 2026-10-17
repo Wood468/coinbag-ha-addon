@@ -30,7 +30,7 @@ jobs:
           import yaml
 
           config = yaml.safe_load(Path("coinbag/config.yaml").read_text())
-          assert config["version"] == "0.1.13"
+          assert config["version"] == "0.1.14"
           assert config["options"]["notify_mode"] == "auto"
           assert config["schema"]["notify_mode"] == "list(auto|start)"
           assert "bleak==2.1.1" in Path("coinbag/Dockerfile").read_text()

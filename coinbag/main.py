@@ -192,8 +192,9 @@ async def handle(device, st, pairing_agent):
 
     device_path = bluez_device_path(device, pick_adapter())
     pairing_agent.set_target_device(device_path)
-    log.info("armed scoped Bluetooth pairing agent for %s", device_path)
     try:
+        await pairing_agent.prefer_low_energy_bearer(device_path)
+        log.info("armed scoped Bluetooth pairing agent for %s", device_path)
         async with BleakClient(device, timeout=CONNECT_TIMEOUT, pair=True, disconnected_callback=disconnected) as client:
             log.info("connected to %s, MTU %s", device.address, getattr(client, "mtu_size", "?"))
             log.debug("GATT service discovery completed; %d services available",
