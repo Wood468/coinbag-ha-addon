@@ -46,6 +46,16 @@ class AddonStaticTests(unittest.TestCase):
         self.assertIn('member="RemoveDevice"', agent)
         self.assertNotIn("async def forget(address):", main)
 
+    def test_go_connection_prefers_low_energy_bearer(self):
+        main = (ROOT / "coinbag" / "main.py").read_text()
+        agent = (ROOT / "coinbag" / "pairing_agent.py").read_text()
+        self.assertLess(
+            main.index("await pairing_agent.prefer_low_energy_bearer(device_path)"),
+            main.index("async with BleakClient("),
+        )
+        self.assertIn('member="Set"', agent)
+        self.assertIn('body=["org.bluez.Device1", "PreferredBearer", Variant("s", "le")]', agent)
+
     def test_pairing_agent_is_scoped_and_uses_just_works_capability(self):
         main = (ROOT / "coinbag" / "main.py").read_text()
         agent = (ROOT / "coinbag" / "pairing_agent.py").read_text()
