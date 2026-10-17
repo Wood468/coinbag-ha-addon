@@ -193,7 +193,10 @@ async def handle(device, st):
             return "paired", name
         if mode[0] == 0x01:
             report(st, "exchanging", name)
-            await exchange(client, app_id, nonce)
+            confirmed = await exchange(client, app_id, nonce)
+            if not confirmed:
+                log.warning("Exchange ended without a validated finalize; postcard count unchanged")
+                return "unconfirmed", name
             st["postcards"] = st.get("postcards", 0) + 1
             st["last_player"], st["last_at"] = name, time.strftime("%Y-%m-%dT%H:%M:%S%z")
             save_state(st)
