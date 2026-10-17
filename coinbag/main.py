@@ -15,7 +15,8 @@ log = logging.getLogger("coinbag")
 U = P.UUIDS
 ADV = U["advertisementService"].lower()
 STATE_FILE = os.environ.get("COINBAG_STATE", "/data/state.json")
-SUCCESS_DELAY, FAILURE_DELAY, GATT_TIMEOUT, INDICATION_TIMEOUT, SETTLE = 5.0, 3.0, 10.0, 15.0, 0.075
+SUCCESS_DELAY, FAILURE_DELAY, GATT_TIMEOUT, INDICATION_TIMEOUT, SETTLE = 60.0, 3.0, 10.0, 15.0, 0.075
+BACKOFF = (3.0, 10.0, 30.0, 60.0)  # seconds to wait after the 1st, 2nd, 3rd, 4th+ failure in a row; stops a pairing-prompt storm on the phone
 
 
 # ---------- persistence ----------
@@ -194,11 +195,22 @@ async def bluez_diag(st):
     ha_set("sensor.coinbag_status", "starting", {"friendly_name": "Coin Bag status", "bluez": keep, "bluez_cached_devices": len([l for l in out["devices"].splitlines() if l.startswith("Device")])})
 
 
+async def forget(address):
+    """Drop BlueZ's cached copy of the phone (stale GATT database, old keys) so the next connection starts clean."""
+    try:
+        p = await asyncio.create_subprocess_exec("bluetoothctl", "remove", address, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await asyncio.wait_for(p.communicate(), 10)
+        log.info("cleared BlueZ cache for %s: %s", address, out.decode(errors="replace").strip()[-80:])
+    except Exception as e:
+        log.info("could not clear BlueZ cache for %s: %s", address, e)
+
+
 async def main():
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
     st = load_state()
     await bluez_diag(st)
     report(st, "scanning")
+    fails, device = 0, None
     while True:
         try:
             report(st, "scanning")
@@ -206,12 +218,18 @@ async def main():
             log.info("Pokémon GO found: %s", device.address)
             report(st, "connecting")
             result, name = await handle(device, st)
+            fails = 0
             report(st, f"{result}", name)
             await asyncio.sleep(SUCCESS_DELAY)
         except Exception as e:
             log.error("failed: %s", e, exc_info=log.isEnabledFor(logging.DEBUG))
             report(st, "failed", str(e))
-            await asyncio.sleep(FAILURE_DELAY)
+            if device is not None:
+                await forget(device.address)
+            wait = BACKOFF[min(fails, len(BACKOFF) - 1)]
+            fails += 1
+            log.info("waiting %.0f s before trying again (%d failures in a row)", wait, fails)
+            await asyncio.sleep(wait)
 
 
 if __name__ == "__main__":
