@@ -196,6 +196,14 @@ async def handle(device, st, pairing_agent):
             log.debug("GATT service discovery completed; %d services available",
                       len(client.services.services))
             await asyncio.sleep(SETTLE)
+            if client.services.get_characteristic(U["readProtocol"]) is None:
+                log.error(
+                    "GO protocol characteristic %s is missing; clearing only this phone's "
+                    "BlueZ GATT cache (%s) before retrying",
+                    U["readProtocol"], device.address,
+                )
+                await forget(device.address)
+                raise RuntimeError("GO protocol characteristic missing; cleared BlueZ cache and will retry")
             proto = await read(client, U["readProtocol"])
             if proto != b"\x01":
                 raise RuntimeError(f"Unsupported protocol value {list(proto)}")
