@@ -17,6 +17,7 @@ U = P.UUIDS
 ADV = U["advertisementService"].lower()
 STATE_FILE = os.environ.get("COINBAG_STATE", "/data/state.json")
 SUCCESS_DELAY, FAILURE_DELAY, INDICATION_TIMEOUT, SETTLE = 60.0, 3.0, 15.0, 0.075
+PAIRING_DELAY = 3.0
 GATT_TIMEOUT = 10.0
 CONNECT_TIMEOUT = 30.0
 NOTIFY_MODE = os.environ.get("NOTIFY_MODE", "auto").strip().lower()
@@ -284,7 +285,10 @@ async def main():
             result, name = await handle(device, st, pairing_agent)
             fails = 0
             report(st, f"{result}", name)
-            await asyncio.sleep(SUCCESS_DELAY)
+            # The postcard exchange uses a second phone connection; resume scanning promptly after pairing.
+            delay = PAIRING_DELAY if result == "paired" else SUCCESS_DELAY
+            log.info("waiting %.0f s after %s before scanning again", delay, result)
+            await asyncio.sleep(delay)
         except Exception as e:
             log.error("failed (%s): %s", type(e).__name__, e, exc_info=log.isEnabledFor(logging.DEBUG))
             report(st, "failed", str(e))

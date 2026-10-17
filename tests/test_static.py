@@ -32,6 +32,12 @@ class AddonStaticTests(unittest.TestCase):
         self.assertIn("BleakClient(device, timeout=CONNECT_TIMEOUT", main)
         self.assertIn("GATT_TIMEOUT = 10.0", main)
 
+    def test_pairing_success_resumes_scanning_promptly(self):
+        main = (ROOT / "coinbag" / "main.py").read_text()
+        self.assertIn("PAIRING_DELAY = 3.0", main)
+        self.assertIn('delay = PAIRING_DELAY if result == "paired" else SUCCESS_DELAY', main)
+        self.assertIn("await asyncio.sleep(delay)", main)
+
     def test_missing_go_protocol_characteristic_removes_only_target_device_record(self):
         main = (ROOT / "coinbag" / "main.py").read_text()
         agent = (ROOT / "coinbag" / "pairing_agent.py").read_text()
