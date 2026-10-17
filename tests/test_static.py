@@ -23,7 +23,17 @@ class AddonStaticTests(unittest.TestCase):
 
     def test_bleak_range_supports_start_notify_override(self):
         dockerfile = (ROOT / "coinbag" / "Dockerfile").read_text()
-        self.assertIn('"bleak>=2.1.1,<3.0"', dockerfile)
+        self.assertIn('"bleak==2.1.1"', dockerfile)
+
+
+    def test_pairing_agent_is_scoped_and_uses_just_works_capability(self):
+        main = (ROOT / "coinbag" / "main.py").read_text()
+        agent = (ROOT / "coinbag" / "pairing_agent.py").read_text()
+        self.assertIn("pair=True", main)
+        self.assertIn("await BlueZPairingAgent.start()", main)
+        self.assertIn('body=[AGENT_PATH, "NoInputNoOutput"]', agent)
+        self.assertIn("is_target_device(self._target_path, device_path)", agent)
+        self.assertIn("org.bluez.Error.Rejected", agent)
 
 
 if __name__ == "__main__":
