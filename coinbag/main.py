@@ -16,6 +16,7 @@ U = P.UUIDS
 ADV = U["advertisementService"].lower()
 STATE_FILE = os.environ.get("COINBAG_STATE", "/data/state.json")
 SUCCESS_DELAY, FAILURE_DELAY, GATT_TIMEOUT, INDICATION_TIMEOUT, SETTLE = 60.0, 3.0, 10.0, 15.0, 0.075
+NOTIFY_MODE = os.environ.get("NOTIFY_MODE", "auto").strip().lower()
 BACKOFF = (3.0, 10.0, 30.0, 60.0)  # seconds to wait after the 1st, 2nd, 3rd, 4th+ failure in a row; stops a pairing-prompt storm on the phone
 
 
@@ -102,6 +103,19 @@ async def write(client, uuid, value, response):
     await asyncio.wait_for(client.write_gatt_char(uuid, value, response=response), GATT_TIMEOUT)
 
 
+async def start_indications(client, uuid, callback):
+    """Subscribe using Bleak's default method or BlueZ StartNotify for compatibility testing."""
+    if NOTIFY_MODE == "start":
+        log.info("subscribing to %s using BlueZ StartNotify", uuid)
+        await asyncio.wait_for(
+            client.start_notify(uuid, callback, bluez={"use_start_notify": True}),
+            GATT_TIMEOUT,
+        )
+    else:
+        log.info("subscribing to %s using Bleak default notification method", uuid)
+        await asyncio.wait_for(client.start_notify(uuid, callback), GATT_TIMEOUT)
+
+
 async def exchange(client, app_id, nonce):
     # iOS GO may tear down its GATT table immediately after the finalize indication.
     # Resolve this characteristic before the exchange and reuse the object for the final write.
@@ -123,7 +137,7 @@ async def exchange(client, app_id, nonce):
     log.info("exchange step: write initial nonce")
     await write(client, U["writeInitialNonce"], P.initial_nonce_value(nonce), False)
     log.info("exchange step: subscribe DATA indications")
-    await asyncio.wait_for(client.start_notify(U["indicateData"], on_indication), GATT_TIMEOUT)
+    await start_indications(client, U["indicateData"], on_indication)
 
     log.info("exchange step: waiting for first DATA indication")
     _, first = await asyncio.wait_for(q.get(), INDICATION_TIMEOUT)
@@ -138,7 +152,7 @@ async def exchange(client, app_id, nonce):
     log.info("first indication validated; completion payload is %d bytes", len(complete))
 
     log.info("exchange step: subscribe STAGE indications")
-    await asyncio.wait_for(client.start_notify(U["indicateStage"], on_indication), GATT_TIMEOUT)
+    await start_indications(client, U["indicateStage"], on_indication)
     log.info("exchange step: write RSA completion")
     await write(client, U["writeComplete"], complete, False)
     log.info("completion written; waiting for finalize indication")
@@ -166,8 +180,16 @@ async def exchange(client, app_id, nonce):
 
 
 async def handle(device, st):
-    async with BleakClient(device, timeout=GATT_TIMEOUT) as client:
+    log.info("connecting to %s (name=%r, rssi=%s) with notify_mode=%s",
+             device.address, device.name, getattr(device, "rssi", "?"), NOTIFY_MODE)
+
+    def disconnected(client):
+        log.warning("BLE disconnected from %s", device.address)
+
+    async with BleakClient(device, timeout=GATT_TIMEOUT, disconnected_callback=disconnected) as client:
         log.info("connected to %s, MTU %s", device.address, getattr(client, "mtu_size", "?"))
+        log.debug("GATT service discovery completed; %d services available",
+                  len(client.services.services))
         await asyncio.sleep(SETTLE)
         proto = await read(client, U["readProtocol"])
         if proto != b"\x01":
@@ -256,7 +278,7 @@ async def main():
             report(st, f"{result}", name)
             await asyncio.sleep(SUCCESS_DELAY)
         except Exception as e:
-            log.error("failed: %s", e, exc_info=log.isEnabledFor(logging.DEBUG))
+            log.error("failed (%s): %s", type(e).__name__, e, exc_info=log.isEnabledFor(logging.DEBUG))
             report(st, "failed", str(e))
             # Do not automatically remove the phone from BlueZ on every failure.
             # That can discard bond/cache state and trigger repeated iOS pairing prompts.
