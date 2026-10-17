@@ -3,7 +3,7 @@ import logging
 import re
 
 from bleak.backends.bluezdbus.manager import get_global_bluez_manager
-from dbus_fast import DBusError, Message, MessageType
+from dbus_fast import DBusError, Message, MessageType, Variant
 from dbus_fast.service import ServiceInterface, method
 
 log = logging.getLogger("coinbag")
@@ -130,6 +130,33 @@ class BlueZPairingAgent:
 
     def clear_target_device(self) -> None:
         self._interface.clear_target_device()
+
+    async def prefer_low_energy_bearer(self, device_path: str) -> bool:
+        """Select BLE for this GO peripheral before its next BlueZ Connect call."""
+        self._interface._require_target(device_path, "bearer selection")
+        reply = await self._bus.call(Message(
+            destination=BLUEZ,
+            path=device_path,
+            interface="org.freedesktop.DBus.Properties",
+            member="Set",
+            signature="ssv",
+            body=["org.bluez.Device1", "PreferredBearer", Variant("s", "le")],
+        ))
+        if reply.message_type == MessageType.ERROR:
+            detail = reply.body[0] if reply.body else reply.error_name
+            if reply.error_name in (
+                "org.freedesktop.DBus.Error.UnknownProperty",
+                "org.bluez.Error.NotSupported",
+            ):
+                log.warning(
+                    "BlueZ does not support PreferredBearer for %s; proceeding with its default bearer: %s",
+                    device_path,
+                    detail,
+                )
+                return False
+            raise RuntimeError(f"BlueZ could not prefer the LE bearer for {device_path}: {detail}")
+        log.info("selected LE as preferred Bluetooth bearer for %s", device_path)
+        return True
 
     async def remove_device(self, device_path: str) -> None:
         """Remove only the active GO device record using the adapter in its BlueZ path."""
