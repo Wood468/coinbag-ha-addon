@@ -26,11 +26,13 @@ class AddonStaticTests(unittest.TestCase):
         self.assertIn('"bleak==2.1.1"', dockerfile)
 
 
-    def test_missing_go_protocol_characteristic_clears_only_target_device_cache(self):
+    def test_missing_go_protocol_characteristic_removes_only_target_device_record(self):
         main = (ROOT / "coinbag" / "main.py").read_text()
+        agent = (ROOT / "coinbag" / "pairing_agent.py").read_text()
         self.assertIn('client.services.get_characteristic(U["readProtocol"]) is None', main)
-        self.assertIn("await forget(device.address)", main)
-        self.assertIn('async def forget(address):', main)
+        self.assertIn("await pairing_agent.remove_device(device_path)", main)
+        self.assertIn('member="RemoveDevice"', agent)
+        self.assertNotIn("async def forget(address):", main)
 
     def test_pairing_agent_is_scoped_and_uses_just_works_capability(self):
         main = (ROOT / "coinbag" / "main.py").read_text()

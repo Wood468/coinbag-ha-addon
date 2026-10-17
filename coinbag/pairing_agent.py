@@ -1,5 +1,6 @@
 """A device-scoped BlueZ pairing agent for Pokémon GO GATT connections."""
 import logging
+import re
 
 from bleak.backends.bluezdbus.manager import get_global_bluez_manager
 from dbus_fast import DBusError, Message, MessageType
@@ -129,6 +130,29 @@ class BlueZPairingAgent:
 
     def clear_target_device(self) -> None:
         self._interface.clear_target_device()
+
+    async def remove_device(self, device_path: str) -> None:
+        """Remove only the active GO device record using the adapter in its BlueZ path."""
+        self._interface._require_target(device_path, "cache removal")
+        if not re.fullmatch(r"/org/bluez/hci[0-9]+/dev_[0-9A-Fa-f_]+", device_path):
+            raise ValueError(f"Invalid BlueZ device object path: {device_path}")
+
+        adapter_path = device_path.rsplit("/", 1)[0]
+        reply = await self._bus.call(Message(
+            destination=BLUEZ,
+            path=adapter_path,
+            interface="org.bluez.Adapter1",
+            member="RemoveDevice",
+            signature="o",
+            body=[device_path],
+        ))
+        if reply.message_type == MessageType.ERROR:
+            if reply.error_name == "org.bluez.Error.DoesNotExist":
+                log.info("BlueZ device record already absent: %s", device_path)
+                return
+            detail = reply.body[0] if reply.body else reply.error_name
+            raise RuntimeError(f"BlueZ could not remove cached device {device_path}: {detail}")
+        log.info("removed BlueZ device record for stale GATT cache: %s", device_path)
 
     async def close(self) -> None:
         reply = await self._bus.call(Message(

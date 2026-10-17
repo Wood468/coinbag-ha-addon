@@ -198,12 +198,12 @@ async def handle(device, st, pairing_agent):
             await asyncio.sleep(SETTLE)
             if client.services.get_characteristic(U["readProtocol"]) is None:
                 log.error(
-                    "GO protocol characteristic %s is missing; clearing only this phone's "
-                    "BlueZ GATT cache (%s) before retrying",
-                    U["readProtocol"], device.address,
+                    "GO protocol characteristic %s is missing; removing only this phone's "
+                    "BlueZ device record (%s) before retrying",
+                    U["readProtocol"], device_path,
                 )
-                await forget(device.address)
-                raise RuntimeError("GO protocol characteristic missing; cleared BlueZ cache and will retry")
+                await pairing_agent.remove_device(device_path)
+                raise RuntimeError("GO protocol characteristic missing; removed its BlueZ device record and will retry")
             proto = await read(client, U["readProtocol"])
             if proto != b"\x01":
                 raise RuntimeError(f"Unsupported protocol value {list(proto)}")
@@ -264,16 +264,6 @@ async def bluez_diag(st):
         log.info("bluetoothctl scan failed: %s", e)
     keep = [l.strip() for l in out["show"].splitlines() if any(k in l for k in ("Controller", "Powered", "Discovering", "Roles"))]
     ha_set("sensor.coinbag_status", "starting", {"friendly_name": "Coin Bag status", "bluez": keep, "bluez_cached_devices": len([l for l in out["devices"].splitlines() if l.startswith("Device")])})
-
-
-async def forget(address):
-    """Drop BlueZ's cached copy of the phone (stale GATT database, old keys) so the next connection starts clean."""
-    try:
-        p = await asyncio.create_subprocess_exec("bluetoothctl", "remove", address, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-        out, _ = await asyncio.wait_for(p.communicate(), 10)
-        log.info("cleared BlueZ cache for %s: %s", address, out.decode(errors="replace").strip()[-80:])
-    except Exception as e:
-        log.info("could not clear BlueZ cache for %s: %s", address, e)
 
 
 async def main():

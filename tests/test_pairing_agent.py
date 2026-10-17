@@ -4,10 +4,10 @@ from types import SimpleNamespace
 import unittest
 import sys
 
-from dbus_fast import DBusError
+from dbus_fast import DBusError, MessageType
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "coinbag"))
 
-from pairing_agent import CoinBagAgent, bluez_device_path, is_target_device
+from pairing_agent import BlueZPairingAgent, CoinBagAgent, bluez_device_path, is_target_device
 
 TARGET = "/org/bluez/hci1/dev_6E_86_AF_37_D5_F4"
 OTHER = "/org/bluez/hci1/dev_00_11_22_33_44_55"
@@ -39,6 +39,44 @@ class PairingAgentTests(unittest.TestCase):
         self.assertTrue(is_target_device(TARGET, TARGET))
         self.assertFalse(is_target_device(TARGET, OTHER))
         self.assertFalse(is_target_device(None, TARGET))
+
+
+
+class FakeBus:
+    def __init__(self):
+        self.message = None
+
+    async def call(self, message):
+        self.message = message
+        return SimpleNamespace(message_type=MessageType.METHOD_RETURN)
+
+
+class PairingAgentRemovalTests(unittest.IsolatedAsyncioTestCase):
+    async def test_remove_device_calls_owning_adapter_with_exact_device_path(self):
+        bus = FakeBus()
+        interface = CoinBagAgent()
+        interface.set_target_device(TARGET)
+        agent = BlueZPairingAgent(bus, interface)
+
+        await agent.remove_device(TARGET)
+
+        self.assertEqual(bus.message.destination, "org.bluez")
+        self.assertEqual(bus.message.path, "/org/bluez/hci1")
+        self.assertEqual(bus.message.interface, "org.bluez.Adapter1")
+        self.assertEqual(bus.message.member, "RemoveDevice")
+        self.assertEqual(bus.message.signature, "o")
+        self.assertEqual(bus.message.body, [TARGET])
+
+    async def test_remove_device_rejects_a_different_active_target(self):
+        bus = FakeBus()
+        interface = CoinBagAgent()
+        interface.set_target_device(TARGET)
+        agent = BlueZPairingAgent(bus, interface)
+
+        with self.assertRaises(DBusError):
+            await agent.remove_device(OTHER)
+
+        self.assertIsNone(bus.message)
 
 
 if __name__ == "__main__":
