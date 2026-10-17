@@ -10,6 +10,7 @@ import urllib.request
 from bleak import BleakClient, BleakScanner
 
 import protocol as P
+from pairing_agent import BlueZPairingAgent, bluez_device_path
 
 log = logging.getLogger("coinbag")
 U = P.UUIDS
@@ -179,53 +180,59 @@ async def exchange(client, app_id, nonce):
     return True
 
 
-async def handle(device, st):
+async def handle(device, st, pairing_agent):
     log.info("connecting to %s (name=%r, rssi=%s) with notify_mode=%s",
              device.address, device.name, getattr(device, "rssi", "?"), NOTIFY_MODE)
 
     def disconnected(client):
         log.warning("BLE disconnected from %s", device.address)
 
-    async with BleakClient(device, timeout=GATT_TIMEOUT, disconnected_callback=disconnected) as client:
-        log.info("connected to %s, MTU %s", device.address, getattr(client, "mtu_size", "?"))
-        log.debug("GATT service discovery completed; %d services available",
-                  len(client.services.services))
-        await asyncio.sleep(SETTLE)
-        proto = await read(client, U["readProtocol"])
-        if proto != b"\x01":
-            raise RuntimeError(f"Unsupported protocol value {list(proto)}")
-        name = P.decode_player_name(await read(client, U["readName"]))
-        mode = await read(client, U["readMode"])
-        if len(mode) != 1:
-            raise RuntimeError("Invalid mode characteristic")
-        app_id = st.get("application_id")
-        if not app_id:
-            app_id = st["application_id"] = P.generate_application_id()
-            save_state(st)
-        nonce = P.random_nonce()
-        if mode[0] == 0x00:
-            report(st, "pairing", name)
-            await asyncio.sleep(0.25)
-            await write(client, U["writeApplicationId"], P.application_id_gatt_value(app_id), True)
-            st.setdefault("paired", [])
-            if name not in st["paired"]:
-                st["paired"].append(name)
-            save_state(st)
-            log.info("PAIRED with %s", name)
-            return "paired", name
-        if mode[0] == 0x01:
-            report(st, "exchanging", name)
-            confirmed = await exchange(client, app_id, nonce)
-            if not confirmed:
-                log.warning("Exchange ended without a validated finalize; postcard count unchanged")
-                return "unconfirmed", name
-            st["postcards"] = st.get("postcards", 0) + 1
-            st["last_player"], st["last_at"] = name, time.strftime("%Y-%m-%dT%H:%M:%S%z")
-            save_state(st)
-            log.info("POSTCARD received from %s (total %d)", name, st["postcards"])
-            return "received", name
-        raise RuntimeError(f"Unsupported mode 0x{mode[0]:02x}")
+    device_path = bluez_device_path(device, pick_adapter())
+    pairing_agent.set_target_device(device_path)
+    log.info("armed scoped Bluetooth pairing agent for %s", device_path)
+    try:
+        async with BleakClient(device, timeout=GATT_TIMEOUT, pair=True, disconnected_callback=disconnected) as client:
+            log.info("connected to %s, MTU %s", device.address, getattr(client, "mtu_size", "?"))
+            log.debug("GATT service discovery completed; %d services available",
+                      len(client.services.services))
+            await asyncio.sleep(SETTLE)
+            proto = await read(client, U["readProtocol"])
+            if proto != b"\x01":
+                raise RuntimeError(f"Unsupported protocol value {list(proto)}")
+            name = P.decode_player_name(await read(client, U["readName"]))
+            mode = await read(client, U["readMode"])
+            if len(mode) != 1:
+                raise RuntimeError("Invalid mode characteristic")
+            app_id = st.get("application_id")
+            if not app_id:
+                app_id = st["application_id"] = P.generate_application_id()
+                save_state(st)
+            nonce = P.random_nonce()
+            if mode[0] == 0x00:
+                report(st, "pairing", name)
+                await asyncio.sleep(0.25)
+                await write(client, U["writeApplicationId"], P.application_id_gatt_value(app_id), True)
+                st.setdefault("paired", [])
+                if name not in st["paired"]:
+                    st["paired"].append(name)
+                save_state(st)
+                log.info("PAIRED with %s", name)
+                return "paired", name
+            if mode[0] == 0x01:
+                report(st, "exchanging", name)
+                confirmed = await exchange(client, app_id, nonce)
+                if not confirmed:
+                    log.warning("Exchange ended without a validated finalize; postcard count unchanged")
+                    return "unconfirmed", name
+                st["postcards"] = st.get("postcards", 0) + 1
+                st["last_player"], st["last_at"] = name, time.strftime("%Y-%m-%dT%H:%M:%S%z")
+                save_state(st)
+                log.info("POSTCARD received from %s (total %d)", name, st["postcards"])
+                return "received", name
+            raise RuntimeError(f"Unsupported mode 0x{mode[0]:02x}")
 
+    finally:
+        pairing_agent.clear_target_device()
 
 async def bluez_diag(st):
     """Log what BlueZ itself reports, so a deaf or missing adapter is obvious."""
@@ -264,6 +271,7 @@ async def forget(address):
 async def main():
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
     st = load_state()
+    pairing_agent = await BlueZPairingAgent.start()
     await bluez_diag(st)
     report(st, "scanning")
     fails, device = 0, None
@@ -273,7 +281,7 @@ async def main():
             device = await wait_for_phone(st)
             log.info("Pokémon GO found: %s", device.address)
             report(st, "connecting")
-            result, name = await handle(device, st)
+            result, name = await handle(device, st, pairing_agent)
             fails = 0
             report(st, f"{result}", name)
             await asyncio.sleep(SUCCESS_DELAY)
