@@ -1,5 +1,5 @@
 name: Coin Bag
-version: "0.1.7"
+version: "0.1.8"
 slug: coinbag
 description: Pairs with Pokémon GO as a Nintendo Switch and receives postcards automatically over Bluetooth.
 url: https://github.com/na-ji/pokemon-go-coin-bag
@@ -14,6 +14,8 @@ homeassistant_api: true
 options:
   log_level: info
   adapter: auto
+  notify_mode: auto
 schema:
   log_level: list(debug|info|warning)
   adapter: str
+  notify_mode: list(auto|start)
