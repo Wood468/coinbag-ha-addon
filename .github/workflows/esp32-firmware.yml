@@ -18,13 +18,12 @@ jobs:
           python coinbag/fetch_constants.py coinbag/constants.json
       - name: Host test (C++ protocol code vs the Python add-on)
         run: |
-          sudo apt-get update -q && sudo apt-get install -y -q libmbedtls-dev
+          (sudo apt-get update -q && sudo apt-get install -y -q libmbedtls-dev
           g++ -std=c++17 -o /tmp/host_test esp32/test/host_test.cpp -lmbedcrypto
-          python esp32/test/compare.py /tmp/host_test
+          python esp32/test/compare.py /tmp/host_test) > /tmp/t.log 2>&1 || { echo "::error::$(tail -c 1500 /tmp/t.log | head -30 | tr '\n' '|')"; exit 1; }
       - name: Build firmware
         run: |
-          pip install platformio esptool
-          pio run -d esp32
+          (pip install platformio esptool && pio run -d esp32) > /tmp/b.log 2>&1 || { echo "::error::$(grep -iE 'error|fatal' /tmp/b.log | head -15 | cut -c1-300 | tr '\n' '|')"; exit 1; }
       - name: Make one flashable file
         run: |
           B=esp32/.pio/build/esp32c3
