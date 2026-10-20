@@ -1,0 +1,37 @@
+esphome:
+  name: coinbag-bedside-proxy
+  friendly_name: Coin Bag Bedside Proxy
+  min_version: 2026.9.1
+  name_add_mac_suffix: true
+
+esp32:
+  variant: esp32c3
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_BT_BLE_42_FEATURES_SUPPORTED: y
+      CONFIG_BT_BLE_50_FEATURES_SUPPORTED: n
+
+wifi:
+  ap:
+    ssid: CoinBag-Bedside-Setup
+    password: !secret coinbag_setup_ap_password
+
+captive_portal:
+
+api:
+  encryption:
+    key: !secret coinbag_esphome_api_key
+
+logger:
+
+ota:
+  - platform: esphome
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: true
+
+bluetooth_proxy:
+  active: true
+  cache_services: false
