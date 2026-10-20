@@ -226,7 +226,8 @@ static void saveParams(WiFiManagerParameter *h, WiFiManagerParameter *p, WiFiMan
 
 void setup() {
   Serial.begin(115200);
-  delay(500);
+  delay(1500);
+  Serial.println("Coin Bag booting");
   pinMode(BOOT_PIN, INPUT_PULLUP);
   prefs.begin("coinbag", false);
   q = xQueueCreate(8, sizeof(Msg *));
@@ -258,7 +259,10 @@ void setup() {
   WiFiManagerParameter pUser("user", "MQTT username", mqUser.c_str(), 64);
   WiFiManagerParameter pPass("pass", "MQTT password", mqPass.c_str(), 64, "type=\"password\"");
   wm.addParameter(&pHost); wm.addParameter(&pPort); wm.addParameter(&pUser); wm.addParameter(&pPass);
-  wm.setConfigPortalTimeout(300);
+  WiFi.mode(WIFI_STA);
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);  // many C3 boards have weak antennas and misbehave at full power
+  wm.setConfigPortalTimeout(wm.getWiFiIsSaved() ? 180 : 0);  // no limit while Wi-Fi hasn't been set up yet
+  wm.setAPCallback([](WiFiManager *) { Serial.println("Setup network CoinBag-Setup is up (192.168.4.1)"); });
   wm.setBreakAfterConfig(true);
   if (reset) { wm.resetSettings(); prefs.clear(); appId.clear(); Serial.println("settings reset"); }
   Serial.println("Wi-Fi: connecting (setup network is CoinBag-Setup if no saved Wi-Fi)");
