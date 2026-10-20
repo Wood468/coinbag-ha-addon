@@ -217,6 +217,21 @@ static Result connectAndHandle(String &playerName) {
 }
 
 // ---------- setup / loop ----------
+static WiFiManager wm;
+static WiFiManagerParameter pHost("host", "Home Assistant MQTT broker (IP or host)", "", 64);
+static WiFiManagerParameter pPort("port", "MQTT port", "1883", 6);
+static WiFiManagerParameter pUser("user", "MQTT username", "", 64);
+static WiFiManagerParameter pPass("pass", "MQTT password", "", 64, "type=\"password\"");
+static void applyParams() {
+  prefs.putString("mqhost", pHost.getValue());
+  prefs.putUShort("mqport", (uint16_t)atoi(pPort.getValue()));
+  prefs.putString("mquser", pUser.getValue());
+  prefs.putString("mqpass", pPass.getValue());
+  mqHost = pHost.getValue(); mqPort = (uint16_t)atoi(pPort.getValue()); mqUser = pUser.getValue(); mqPass = pPass.getValue();
+  if (!mqPort) mqPort = 1883;
+  useMqtt = mqHost.length() > 0;
+  if (useMqtt) { mq.setServer(mqHost.c_str(), mqPort); mq.setBufferSize(1024); }
+}
 static void saveParams(WiFiManagerParameter *h, WiFiManagerParameter *p, WiFiManagerParameter *u, WiFiManagerParameter *w) {
   prefs.putString("mqhost", h->getValue());
   prefs.putUShort("mqport", (uint16_t)atoi(p->getValue()));
@@ -251,13 +266,9 @@ void setup() {
     reset = digitalRead(BOOT_PIN) == LOW;
   }
 
-  WiFiManager wm;
   char portBuf[8];
   snprintf(portBuf, sizeof portBuf, "%u", mqPort);
-  WiFiManagerParameter pHost("host", "Home Assistant MQTT broker (IP or host)", mqHost.c_str(), 64);
-  WiFiManagerParameter pPort("port", "MQTT port", portBuf, 6);
-  WiFiManagerParameter pUser("user", "MQTT username", mqUser.c_str(), 64);
-  WiFiManagerParameter pPass("pass", "MQTT password", mqPass.c_str(), 64, "type=\"password\"");
+  pHost.setValue(mqHost.c_str(), 64); pPort.setValue(portBuf, 6); pUser.setValue(mqUser.c_str(), 64); pPass.setValue(mqPass.c_str(), 64);
   wm.addParameter(&pHost); wm.addParameter(&pPort); wm.addParameter(&pUser); wm.addParameter(&pPass);
   WiFi.mode(WIFI_STA);
   WiFi.setTxPower(WIFI_POWER_8_5dBm);  // many C3 boards have weak antennas and misbehave at full power
@@ -267,13 +278,7 @@ void setup() {
   if (reset) { wm.resetSettings(); prefs.clear(); appId.clear(); Serial.println("settings reset"); }
   Serial.println("Wi-Fi: connecting (setup network is CoinBag-Setup if no saved Wi-Fi)");
   bool ok = wm.autoConnect("CoinBag-Setup");
-  if (ok) {
-    saveParams(&pHost, &pPort, &pUser, &pPass);
-    mqHost = pHost.getValue(); mqPort = (uint16_t)atoi(pPort.getValue()); mqUser = pUser.getValue(); mqPass = pPass.getValue();
-    if (!mqPort) mqPort = 1883;
-  }
-  useMqtt = ok && mqHost.length();
-  if (useMqtt) { mq.setServer(mqHost.c_str(), mqPort); mq.setBufferSize(1024); }
+  if (ok) applyParams(); else { useMqtt = mqHost.length() > 0; if (useMqtt) { mq.setServer(mqHost.c_str(), mqPort); mq.setBufferSize(1024); } }
   Serial.printf("Wi-Fi %s, MQTT %s\n", ok ? "up" : "not connected (BLE still runs)", useMqtt ? "enabled" : "off");
 
   NimBLEDevice::init("CoinBag");
@@ -287,7 +292,23 @@ void setup() {
 void loop() {
   static int fails = 0;
   pump();
-  if (WiFi.status() != WL_CONNECTED && useMqtt) { static uint32_t t = 0; if (millis() - t > 15000) { t = millis(); WiFi.reconnect(); } }
+  {
+    static uint32_t downSince = 0, lastTry = 0;
+    if (WiFi.status() == WL_CONNECTED) downSince = 0;
+    else {
+      if (!downSince) downSince = millis();
+      if (millis() - lastTry > 15000) { lastTry = millis(); WiFi.reconnect(); }
+      // Wi-Fi has been down 5 minutes: reopen the setup network for 2 minutes so it can be fixed from a phone/PC.
+      static uint32_t lastPortal = 0;
+      if (millis() - downSince > 300000 && (!lastPortal || millis() - lastPortal > 600000)) {
+        Serial.println("Wi-Fi down for 5 min: opening CoinBag-Setup for 2 min");
+        wm.setConfigPortalTimeout(120);
+        wm.setBreakAfterConfig(true);
+        if (wm.startConfigPortal("CoinBag-Setup")) applyParams();
+        lastPortal = millis();
+      }
+    }
+  }
   if (!scanForPhone()) return;
   Serial.println("Pokémon GO found: " + String(foundAddr.toString().c_str()));
   report("connecting");
