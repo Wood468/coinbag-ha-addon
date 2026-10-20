@@ -21,6 +21,9 @@ PAIRING_DELAY = 3.0
 GATT_TIMEOUT = 10.0
 CONNECT_TIMEOUT = 30.0
 NOTIFY_MODE = os.environ.get("NOTIFY_MODE", "auto").strip().lower()
+TRANSPORT = os.environ.get("TRANSPORT", "bluez").strip().lower()
+ESPHOME_ADDRESS = os.environ.get("ESPHOME_ADDRESS", "").strip()
+ESPHOME_NOISE_PSK = os.environ.get("ESPHOME_NOISE_PSK", "").strip()
 BACKOFF = (3.0, 10.0, 30.0, 60.0)  # seconds to wait after the 1st, 2nd, 3rd, 4th+ failure in a row; stops a pairing-prompt storm on the phone
 
 
@@ -61,6 +64,27 @@ def report(st: dict, status: str, detail: str = ""):
 
 
 # ---------- BLE ----------
+async def start_esphome_proxy():
+    """Register the configured ESPHome proxy as Bleak's remote BLE adapter."""
+    if not ESPHOME_ADDRESS:
+        raise RuntimeError("transport=esphome requires an ESPHome proxy address")
+    if not ESPHOME_NOISE_PSK:
+        raise RuntimeError("transport=esphome requires the proxy's API encryption key")
+
+    import habluetooth
+    from bleak_esphome import APIConnectionManager
+
+    await habluetooth.BluetoothManager().async_setup()
+    manager = APIConnectionManager({
+        "address": ESPHOME_ADDRESS,
+        "noise_psk": ESPHOME_NOISE_PSK or None,
+    })
+    log.info("connecting to ESPHome Bluetooth proxy at %s", ESPHOME_ADDRESS)
+    await manager.start()
+    log.info("ESPHome Bluetooth proxy connected")
+    return manager
+
+
 def pick_adapter() -> str:
     """ADAPTER option: 'auto' uses the highest-numbered adapter (a newly plugged USB dongle becomes hci1), else the named one."""
     want = os.environ.get("ADAPTER", "auto").strip()
@@ -73,7 +97,7 @@ def pick_adapter() -> str:
         return "hci0"
 
 
-async def wait_for_phone(st):
+async def wait_for_phone(st, transport=TRANSPORT):
     """Scan without a BlueZ filter (more reliable) and match the Pokémon GO service ourselves.
     Every 15 s the sensor shows how many BLE devices were heard, so we can tell whether scanning works at all."""
     found, ev, seen = [], asyncio.Event(), {}
@@ -84,9 +108,17 @@ async def wait_for_phone(st):
             found.append(device)
             ev.set()
 
-    adapter = pick_adapter()
-    log.info("scanning with adapter %s", adapter)
-    async with BleakScanner(cb, adapter=adapter):
+    scanner_options = {}
+    if transport == "bluez":
+        adapter = pick_adapter()
+        scanner_options["adapter"] = adapter
+        log.info("scanning with BlueZ adapter %s", adapter)
+    elif transport == "esphome":
+        log.info("scanning through ESPHome Bluetooth proxy at %s", ESPHOME_ADDRESS)
+    else:
+        raise ValueError(f"Unsupported Bluetooth transport: {transport}")
+
+    async with BleakScanner(cb, **scanner_options):
         while not ev.is_set():
             try:
                 await asyncio.wait_for(ev.wait(), 15)
@@ -107,20 +139,22 @@ async def write(client, uuid, value, response):
     await asyncio.wait_for(client.write_gatt_char(uuid, value, response=response), GATT_TIMEOUT)
 
 
-async def start_indications(client, uuid, callback):
+async def start_indications(client, uuid, callback, transport=TRANSPORT):
     """Subscribe using Bleak's default method or BlueZ StartNotify for compatibility testing."""
-    if NOTIFY_MODE == "start":
+    if transport == "bluez" and NOTIFY_MODE == "start":
         log.info("subscribing to %s using BlueZ StartNotify", uuid)
         await asyncio.wait_for(
             client.start_notify(uuid, callback, bluez={"use_start_notify": True}),
             GATT_TIMEOUT,
         )
     else:
+        if transport == "esphome" and NOTIFY_MODE == "start":
+            log.warning("notify_mode=start is BlueZ-only; using the ESPHome GATT subscription")
         log.info("subscribing to %s using Bleak default notification method", uuid)
         await asyncio.wait_for(client.start_notify(uuid, callback), GATT_TIMEOUT)
 
 
-async def exchange(client, app_id, nonce):
+async def exchange(client, app_id, nonce, transport=TRANSPORT):
     # iOS GO may tear down its GATT table immediately after the finalize indication.
     # Resolve this characteristic before the exchange and reuse the object for the final write.
     final_nonce_char = client.services.get_characteristic(U["writeFinalNonce"])
@@ -141,7 +175,7 @@ async def exchange(client, app_id, nonce):
     log.info("exchange step: write initial nonce")
     await write(client, U["writeInitialNonce"], P.initial_nonce_value(nonce), False)
     log.info("exchange step: subscribe DATA indications")
-    await start_indications(client, U["indicateData"], on_indication)
+    await start_indications(client, U["indicateData"], on_indication, transport)
 
     log.info("exchange step: waiting for first DATA indication")
     _, first = await asyncio.wait_for(q.get(), INDICATION_TIMEOUT)
@@ -156,7 +190,7 @@ async def exchange(client, app_id, nonce):
     log.info("first indication validated; completion payload is %d bytes", len(complete))
 
     log.info("exchange step: subscribe STAGE indications")
-    await start_indications(client, U["indicateStage"], on_indication)
+    await start_indications(client, U["indicateStage"], on_indication, transport)
     log.info("exchange step: write RSA completion")
     await write(client, U["writeComplete"], complete, False)
     log.info("completion written; waiting for finalize indication")
@@ -183,31 +217,52 @@ async def exchange(client, app_id, nonce):
     return True
 
 
-async def handle(device, st, pairing_agent):
+async def handle(device, st, pairing_agent=None, transport=TRANSPORT):
     log.info("connecting to %s (name=%r, rssi=%s) with notify_mode=%s",
              device.address, device.name, getattr(device, "rssi", "?"), NOTIFY_MODE)
 
     def disconnected(client):
         log.warning("BLE disconnected from %s", device.address)
 
-    device_path = bluez_device_path(device, pick_adapter())
-    pairing_agent.set_target_device(device_path)
+    device_path = None
     try:
-        await pairing_agent.prefer_low_energy_bearer(device_path)
-        log.info("armed scoped Bluetooth pairing agent for %s", device_path)
+        if transport == "bluez":
+            if pairing_agent is None:
+                raise RuntimeError("BlueZ transport requires its scoped pairing agent")
+            device_path = bluez_device_path(device, pick_adapter())
+            pairing_agent.set_target_device(device_path)
+            await pairing_agent.prefer_low_energy_bearer(device_path)
+            log.info("armed scoped Bluetooth pairing agent for %s", device_path)
+        elif transport == "esphome":
+            log.info("pairing and GATT connection will use the ESPHome proxy")
+        else:
+            raise ValueError(f"Unsupported Bluetooth transport: {transport}")
+
         async with BleakClient(device, timeout=CONNECT_TIMEOUT, pair=True, disconnected_callback=disconnected) as client:
             log.info("connected to %s, MTU %s", device.address, getattr(client, "mtu_size", "?"))
             log.debug("GATT service discovery completed; %d services available",
                       len(client.services.services))
             await asyncio.sleep(SETTLE)
             if client.services.get_characteristic(U["readProtocol"]) is None:
-                log.error(
-                    "GO protocol characteristic %s is missing; removing only this phone's "
-                    "BlueZ device record (%s) before retrying",
-                    U["readProtocol"], device_path,
-                )
-                await pairing_agent.remove_device(device_path)
-                raise RuntimeError("GO protocol characteristic missing; removed its BlueZ device record and will retry")
+                if pairing_agent is not None:
+                    log.error(
+                        "GO protocol characteristic %s is missing; removing only this phone's "
+                        "BlueZ device record (%s) before retrying",
+                        U["readProtocol"], device_path,
+                    )
+                    await pairing_agent.remove_device(device_path)
+                    raise RuntimeError("GO protocol characteristic missing; removed its BlueZ device record and will retry")
+                else:
+                    log.error(
+                        "GO protocol characteristic %s is missing; clearing only this phone's "
+                        "cached ESPHome GATT services before retrying",
+                        U["readProtocol"],
+                    )
+                    clear_cache = getattr(client, "clear_cache", None)
+                    if clear_cache is not None:
+                        await clear_cache()
+                        log.info("cleared the ESPHome proxy's cached GATT services for %s", device.address)
+                    raise RuntimeError("GO protocol characteristic missing; cleared the ESPHome GATT cache and will retry")
             proto = await read(client, U["readProtocol"])
             if proto != b"\x01":
                 raise RuntimeError(f"Unsupported protocol value {list(proto)}")
@@ -232,7 +287,7 @@ async def handle(device, st, pairing_agent):
                 return "paired", name
             if mode[0] == 0x01:
                 report(st, "exchanging", name)
-                confirmed = await exchange(client, app_id, nonce)
+                confirmed = await exchange(client, app_id, nonce, transport)
                 if not confirmed:
                     log.warning("Exchange ended without a validated finalize; postcard count unchanged")
                     return "unconfirmed", name
@@ -244,7 +299,8 @@ async def handle(device, st, pairing_agent):
             raise RuntimeError(f"Unsupported mode 0x{mode[0]:02x}")
 
     finally:
-        pairing_agent.clear_target_device()
+        if pairing_agent is not None:
+            pairing_agent.clear_target_device()
 
 async def bluez_diag(st):
     """Log what BlueZ itself reports, so a deaf or missing adapter is obvious."""
@@ -273,34 +329,50 @@ async def bluez_diag(st):
 async def main():
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
     st = load_state()
-    pairing_agent = await BlueZPairingAgent.start()
-    await bluez_diag(st)
-    report(st, "scanning")
-    fails, device = 0, None
-    while True:
-        try:
-            report(st, "scanning")
-            device = await wait_for_phone(st)
-            log.info("Pokémon GO found: %s", device.address)
-            report(st, "connecting")
-            result, name = await handle(device, st, pairing_agent)
-            fails = 0
-            report(st, f"{result}", name)
-            # The postcard exchange uses a second phone connection; resume scanning promptly after pairing.
-            delay = PAIRING_DELAY if result == "paired" else SUCCESS_DELAY
-            log.info("waiting %.0f s after %s before scanning again", delay, result)
-            await asyncio.sleep(delay)
-        except Exception as e:
-            log.error("failed (%s): %s", type(e).__name__, e, exc_info=log.isEnabledFor(logging.DEBUG))
-            report(st, "failed", str(e))
-            # Do not automatically remove the phone from BlueZ on every failure.
-            # That can discard bond/cache state and trigger repeated iOS pairing prompts.
-            # Keep the device record; stale-service recovery should be an explicit,
-            # targeted diagnostic step rather than a side effect of any exchange error.
-            wait = BACKOFF[min(fails, len(BACKOFF) - 1)]
-            fails += 1
-            log.info("waiting %.0f s before trying again (%d failures in a row)", wait, fails)
-            await asyncio.sleep(wait)
+    if TRANSPORT not in ("bluez", "esphome"):
+        raise RuntimeError("transport must be 'bluez' or 'esphome'")
+
+    pairing_agent = None
+    proxy_manager = None
+    try:
+        if TRANSPORT == "bluez":
+            pairing_agent = await BlueZPairingAgent.start()
+            await bluez_diag(st)
+        else:
+            report(st, "connecting_proxy", ESPHOME_ADDRESS)
+            proxy_manager = await start_esphome_proxy()
+
+        report(st, "scanning")
+        fails, device = 0, None
+        while True:
+            try:
+                report(st, "scanning")
+                device = await wait_for_phone(st, TRANSPORT)
+                log.info("Pokémon GO found: %s", device.address)
+                report(st, "connecting")
+                result, name = await handle(device, st, pairing_agent, TRANSPORT)
+                fails = 0
+                report(st, f"{result}", name)
+                # The postcard exchange uses a second phone connection; resume scanning promptly after pairing.
+                delay = PAIRING_DELAY if result == "paired" else SUCCESS_DELAY
+                log.info("waiting %.0f s after %s before scanning again", delay, result)
+                await asyncio.sleep(delay)
+            except Exception as e:
+                log.error("failed (%s): %s", type(e).__name__, e, exc_info=log.isEnabledFor(logging.DEBUG))
+                report(st, "failed", str(e))
+                # Do not automatically remove the phone from BlueZ on every failure.
+                # That can discard bond/cache state and trigger repeated iOS pairing prompts.
+                # Keep the device record; stale-service recovery should be an explicit,
+                # targeted diagnostic step rather than a side effect of any exchange error.
+                wait = BACKOFF[min(fails, len(BACKOFF) - 1)]
+                fails += 1
+                log.info("waiting %.0f s before trying again (%d failures in a row)", wait, fails)
+                await asyncio.sleep(wait)
+    finally:
+        if proxy_manager is not None:
+            await proxy_manager.stop()
+        if pairing_agent is not None:
+            await pairing_agent.close()
 
 
 if __name__ == "__main__":

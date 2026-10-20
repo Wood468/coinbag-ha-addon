@@ -15,10 +15,41 @@ class AddonStaticTests(unittest.TestCase):
         self.assertIn("notify_mode: list(auto|start)", config)
         self.assertIn("export LOG_LEVEL ADAPTER NOTIFY_MODE", run)
 
+    def test_esphome_transport_is_optional_and_has_secret_api_key_option(self):
+        main = (ROOT / "coinbag" / "main.py").read_text()
+        config = (ROOT / "coinbag" / "config.yaml").read_text()
+        run = (ROOT / "coinbag" / "run.sh").read_text()
+        dockerfile = (ROOT / "coinbag" / "Dockerfile").read_text()
+        self.assertIn('TRANSPORT = os.environ.get("TRANSPORT", "bluez")', main)
+        self.assertIn('transport: bluez', config)
+        self.assertIn('esphome_noise_psk: password?', config)
+        self.assertIn("ESPHOME_ADDRESS", run)
+        self.assertIn("ESPHOME_NOISE_PSK", run)
+        self.assertIn('"bleak-esphome==3.9.1"', dockerfile)
+        self.assertIn('version: "0.1.15"', config)
+
+    def test_esp32_c3_example_enables_pairing_capable_proxy_without_wifi_secrets(self):
+        proxy = (ROOT / "coinbag" / "esp32-c3-proxy.example.yaml").read_text()
+        self.assertIn("variant: esp32c3", proxy)
+        self.assertIn("bluetooth_proxy:\n  active: true", proxy)
+        self.assertIn("cache_services: false", proxy)
+        self.assertIn("key: !secret coinbag_esphome_api_key", proxy)
+        self.assertIn("password: !secret coinbag_setup_ap_password", proxy)
+        self.assertNotIn("wifi_ssid", proxy)
+        self.assertNotIn("wifi_password", proxy)
+
+    def test_proxy_manager_starts_before_scanning_and_bluez_agent_is_optional(self):
+        main = (ROOT / "coinbag" / "main.py").read_text()
+        self.assertIn("await habluetooth.BluetoothManager().async_setup()", main)
+        self.assertIn("await manager.start()", main)
+        self.assertIn('await wait_for_phone(st, TRANSPORT)', main)
+        self.assertIn("if pairing_agent is not None:\n            pairing_agent.clear_target_device()", main)
+        self.assertIn('if transport == "bluez":\n        adapter = pick_adapter()', main)
+
     def test_both_indication_subscriptions_use_shared_helper(self):
         main = (ROOT / "coinbag" / "main.py").read_text()
-        self.assertIn('await start_indications(client, U["indicateData"], on_indication)', main)
-        self.assertIn('await start_indications(client, U["indicateStage"], on_indication)', main)
+        self.assertIn('await start_indications(client, U["indicateData"], on_indication, transport)', main)
+        self.assertIn('await start_indications(client, U["indicateStage"], on_indication, transport)', main)
         self.assertIn('bluez={"use_start_notify": True}', main)
 
     def test_bleak_range_supports_start_notify_override(self):
