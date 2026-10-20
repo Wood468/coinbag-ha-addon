@@ -191,8 +191,8 @@ static bool scanForPhone() {
   int heard = r.getCount();
   bool found = false;
   for (int i = 0; i < heard && !found; i++) {
-    NimBLEAdvertisedDevice *d = r.getDevice(i);
-    if (d->isAdvertisingService(NimBLEUUID(UUID_ADV))) { foundAddr = d->getAddress(); found = true; }
+    NimBLEAdvertisedDevice d = r.getDevice(i);
+    if (d.isAdvertisingService(NimBLEUUID(UUID_ADV))) { foundAddr = d.getAddress(); found = true; }
   }
   sc->clearResults();
   if (!found) report("scanning", "", heard);
