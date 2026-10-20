@@ -1,0 +1,41 @@
+name: ESP32-C3 firmware
+on:
+  push:
+    paths: ["esp32/**", ".github/workflows/esp32-firmware.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Fetch protocol constants (not stored in the repo)
+        run: |
+          python esp32/gen_constants.py esp32/src/constants.h
+          python coinbag/fetch_constants.py coinbag/constants.json
+      - name: Host test (C++ protocol code vs the Python add-on)
+        run: |
+          (sudo apt-get update -q && sudo apt-get install -y -q libmbedtls-dev
+          g++ -std=c++17 -o /tmp/host_test esp32/test/host_test.cpp -lmbedcrypto
+          python esp32/test/compare.py /tmp/host_test) > /tmp/t.log 2>&1 || { echo "::error::$(grep -vE "^(Get|Hit|Fetched|Selecting|Preparing|Unpacking|Setting up|Reading|Building|Need|After|Do you|Processing|\(Reading)" /tmp/t.log | tail -12 | cut -c1-300 | tr '\n' '|')"; exit 1; }
+      - name: Build firmware
+        run: |
+          (pip install platformio esptool && pio run -d esp32) > /tmp/b.log 2>&1 || { echo "::error::$(grep -iE 'error|fatal' /tmp/b.log | head -15 | cut -c1-300 | tr '\n' '|')"; exit 1; }
+      - name: Make one flashable file
+        run: |
+          B=esp32/.pio/build/esp32c3
+          BOOTAPP=$(find ~/.platformio/packages -name boot_app0.bin | head -1)
+          esptool.py --chip esp32c3 merge_bin -o coinbag-esp32c3.bin --flash_mode dio --flash_freq 80m --flash_size 4MB \
+            0x0 $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 "$BOOTAPP" 0x10000 $B/firmware.bin
+          ls -l coinbag-esp32c3.bin
+      - uses: actions/upload-artifact@v4
+        with: { name: coinbag-esp32c3, path: coinbag-esp32c3.bin }
+      - name: Publish to the esp32-latest release
+        if: github.ref == 'refs/heads/main'
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release view esp32-latest >/dev/null 2>&1 || gh release create esp32-latest --title "ESP32-C3 firmware (latest)" --notes "Flash coinbag-esp32c3.bin at address 0 with https://web.esphome.io"
+          gh release upload esp32-latest coinbag-esp32c3.bin --clobber
