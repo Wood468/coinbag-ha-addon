@@ -293,14 +293,13 @@ void loop() {
   static int fails = 0;
   pump();
   {
-    static uint32_t downSince = 0, lastTry = 0;
-    if (WiFi.status() == WL_CONNECTED) downSince = 0;
+    static uint32_t downSince = 0, lastTry = 0, lastPortal = 0;
+    if (WiFi.status() == WL_CONNECTED) { downSince = 0; lastPortal = 0; }
     else {
       if (!downSince) downSince = millis();
       if (millis() - lastTry > 15000) { lastTry = millis(); WiFi.reconnect(); }
       // Wi-Fi has been down 5 minutes: reopen the setup network for 2 minutes so it can be fixed from a phone/PC.
-      static uint32_t lastPortal = 0;
-      if (millis() - downSince > 300000 && (!lastPortal || millis() - lastPortal > 600000)) {
+      if (millis() - downSince > 300000 && !lastPortal) {  // once per outage, so Bluetooth scanning is not interrupted repeatedly
         Serial.println("Wi-Fi down for 5 min: opening CoinBag-Setup for 2 min");
         wm.setConfigPortalTimeout(120);
         wm.setBreakAfterConfig(true);
