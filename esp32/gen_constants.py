@@ -21,3 +21,12 @@ lines.append(f'static const char RSA_D_HEX[] = "{c["RSA_PRIVATE_EXPONENT"].remov
 lines.append(f'static const char DIGEST_PREFIX_HEX[] = "{c["SHA256_DIGEST_INFO_PREFIX"]}";')
 open(out, "w").write("\n".join(lines) + "\n")
 print("constants.h written")
+
+import os, json as _j
+def cstr(v): return _j.dumps(v or "")  # JSON string literals are valid C string literals for our characters
+d = ["#pragma once"]
+for env, name in (("WIFI_SSID", "DEFAULT_SSID"), ("WIFI_PASS", "DEFAULT_PASS"), ("MQTT_HOST", "DEFAULT_MQTT_HOST"),
+                  ("MQTT_USER", "DEFAULT_MQTT_USER"), ("MQTT_PASS", "DEFAULT_MQTT_PASS")):
+    d.append(f"#define {name} {cstr(os.environ.get(env))}")
+open(os.path.join(os.path.dirname(out), "defaults.h"), "w").write("\n".join(d) + "\n")
+print("defaults.h written (" + ("with" if os.environ.get("WIFI_SSID") else "without") + " baked-in Wi-Fi)")

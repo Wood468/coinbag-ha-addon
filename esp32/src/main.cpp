@@ -7,6 +7,7 @@
 #include <Preferences.h>
 #include <NimBLEDevice.h>
 #include "proto.h"
+#include "defaults.h"
 
 SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 
@@ -277,7 +278,18 @@ void setup() {
   wm.setBreakAfterConfig(true);
   if (reset) { wm.resetSettings(); prefs.clear(); appId.clear(); Serial.println("settings reset"); }
   Serial.println("Wi-Fi: connecting (setup network is CoinBag-Setup if no saved Wi-Fi)");
-  bool ok = wm.autoConnect("CoinBag-Setup");
+  bool ok = false;
+  if (strlen(DEFAULT_SSID) && !reset) {  // Wi-Fi baked in at build time: try it first, fall back to the setup page
+    Serial.println("Wi-Fi: trying built-in network");
+    WiFi.begin(DEFAULT_SSID, DEFAULT_PASS);
+    for (int i = 0; i < 40 && WiFi.status() != WL_CONNECTED; i++) delay(500);
+    ok = WiFi.status() == WL_CONNECTED;
+    if (ok) {
+      if (!mqHost.length() && strlen(DEFAULT_MQTT_HOST)) { mqHost = DEFAULT_MQTT_HOST; mqUser = DEFAULT_MQTT_USER; mqPass = DEFAULT_MQTT_PASS; mqPort = 1883; }
+      pHost.setValue(mqHost.c_str(), 64); pUser.setValue(mqUser.c_str(), 64); pPass.setValue(mqPass.c_str(), 64);
+    } else Serial.printf("built-in Wi-Fi failed (status %d)\n", (int)WiFi.status());
+  }
+  if (!ok) ok = wm.autoConnect("CoinBag-Setup");
   if (ok) applyParams(); else { useMqtt = mqHost.length() > 0; if (useMqtt) { mq.setServer(mqHost.c_str(), mqPort); mq.setBufferSize(1024); } }
   Serial.printf("Wi-Fi %s, MQTT %s\n", ok ? "up" : "not connected (BLE still runs)", useMqtt ? "enabled" : "off");
 

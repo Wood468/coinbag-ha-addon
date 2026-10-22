@@ -3,6 +3,11 @@ on:
   push:
     paths: ["esp32/**", ".github/workflows/esp32-firmware.yml"]
   workflow_dispatch:
+    inputs:
+      with_wifi:
+        description: Bake the Wi-Fi/MQTT secrets into a private build (not published)
+        type: boolean
+        default: false
 permissions:
   contents: write
 jobs:
@@ -13,6 +18,12 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - name: Fetch protocol constants (not stored in the repo)
+        env:
+          WIFI_SSID: ${{ inputs.with_wifi && secrets.COINBAG_WIFI_SSID || '' }}
+          WIFI_PASS: ${{ inputs.with_wifi && secrets.COINBAG_WIFI_PASS || '' }}
+          MQTT_HOST: ${{ inputs.with_wifi && secrets.COINBAG_MQTT_HOST || '' }}
+          MQTT_USER: ${{ inputs.with_wifi && secrets.COINBAG_MQTT_USER || '' }}
+          MQTT_PASS: ${{ inputs.with_wifi && secrets.COINBAG_MQTT_PASS || '' }}
         run: |
           python esp32/gen_constants.py esp32/src/constants.h
           python coinbag/fetch_constants.py coinbag/constants.json
@@ -32,9 +43,9 @@ jobs:
             0x0 $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 "$BOOTAPP" 0x10000 $B/firmware.bin
           ls -l coinbag-esp32c3.bin
       - uses: actions/upload-artifact@v4
-        with: { name: coinbag-esp32c3, path: coinbag-esp32c3.bin }
+        with: { name: coinbag-esp32c3, path: coinbag-esp32c3.bin, retention-days: 1 }
       - name: Publish to the esp32-latest release
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && !inputs.with_wifi
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           gh release view esp32-latest >/dev/null 2>&1 || gh release create esp32-latest --title "ESP32-C3 firmware (latest)" --notes "Flash coinbag-esp32c3.bin at address 0 with https://web.esphome.io"

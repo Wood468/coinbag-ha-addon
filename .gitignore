@@ -1,3 +1,4 @@
 esp32/src/constants.h
 esp32/.pio/
 __pycache__/
+esp32/src/defaults.h
