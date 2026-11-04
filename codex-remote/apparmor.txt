@@ -1,0 +1,27 @@
+# Isolated Codex SSH app profile.
+#include <tunables/global>
+profile codex_remote flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  network,
+  capability,
+  /usr/** rix,
+  /bin/** rix,
+  /sbin/** rix,
+  /lib/** mr,
+  /lib64/** mr,
+  /etc/** r,
+  /run/** rw,
+  /proc/** r,
+  /dev/null rw,
+  /dev/zero rw,
+  /dev/urandom r,
+  /dev/tty rw,
+  /data/** rwk,
+  /tmp/** rwk,
+  /usr/sbin/sshd rix,
+  /usr/bin/python3 rix,
+  /usr/bin/node rix,
+  deny /config/** rwklx,
+  deny /var/run/docker.sock rwklx,
+  deny /run/docker.sock rwklx,
+}
