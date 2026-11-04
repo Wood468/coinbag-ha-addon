@@ -1,0 +1,25 @@
+name: Codex Remote SSH
+slug: codex_remote
+description: Isolated SSH endpoint for Codex remote projects
+version: "0.1.0"
+url: https://github.com/Wood468/coinbag-ha-addon
+arch:
+  - amd64
+  - aarch64
+startup: services
+boot: manual
+init: false
+host_network: false
+hassio_api: false
+homeassistant_api: false
+docker_api: false
+apparmor: true
+map:
+  - type: addon_config
+    read_only: false
+    path: /data
+options:
+  authorized_keys: ""
+schema:
+  authorized_keys: str
+ports: {}
