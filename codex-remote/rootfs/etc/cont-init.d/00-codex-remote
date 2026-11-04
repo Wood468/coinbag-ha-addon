@@ -1,0 +1,5 @@
+#!/usr/bin/with-contenv bashio
+set -euo pipefail
+mkdir -p /data/codex-remote /data/codex-home /data/workspaces /data/ssh
+chown -R codex-remote:codex-remote /data/codex-remote /data/codex-home /data/workspaces
+chmod 700 /data/codex-home /data/ssh
