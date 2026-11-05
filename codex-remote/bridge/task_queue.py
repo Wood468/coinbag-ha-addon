@@ -6,11 +6,11 @@ command from callers. It is not wired into the running SSH add-on.
 from __future__ import annotations
 
 import dataclasses
-import json
 import os
 import pathlib
 import re
 import subprocess
+import signal
 import threading
 import time
 import uuid
@@ -50,6 +50,8 @@ class TaskQueue:
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > MAX_PROMPT:
             raise ValueError("Invalid prompt")
         # Resolve and verify an existing workspace; never create or clone on demand.
+        # This prototype must not be exposed to untrusted clients: read-only sandbox
+        # support on Home Assistant OS remains unverified.
         base = self.workspaces.resolve(strict=True)
         workspace = (base / PROJECTS[project]).resolve(strict=True)
         if workspace.parent != base or not workspace.is_dir():
@@ -69,7 +71,7 @@ class TaskQueue:
         try:
             env = {key: value for key, value in os.environ.items()
                    if key in ("HOME", "PATH", "CODEX_HOME", "LANG", "TERM")}
-            command = ["codex", "exec", "--sandbox", "read-only",
+            command = ["codex", "--no-daemon", "exec", "--sandbox", "read-only",
                        "--skip-git-repo-check", "-C", str(workspace), prompt]
             with subprocess.Popen(
                 command, cwd=str(workspace), env=env, shell=False,
@@ -78,11 +80,13 @@ class TaskQueue:
             ) as proc:
                 with self._lock:
                     self._process = proc
+                    if task.state == "cancelled":
+                        os.killpg(proc.pid, signal.SIGKILL)
                 try:
                     stdout, _ = proc.communicate(timeout=TIMEOUT_SECONDS)
                     state = "succeeded" if proc.returncode == 0 else "failed"
                 except subprocess.TimeoutExpired:
-                    proc.kill()
+                    os.killpg(proc.pid, signal.SIGKILL)
                     stdout, _ = proc.communicate()
                     state = "timed_out"
                 with self._lock:
@@ -90,15 +94,16 @@ class TaskQueue:
                     task.exit_code = proc.returncode
                     if task.state != "cancelled":
                         task.state = state
-        except Exception as exc:
+        except Exception:
             with self._lock:
                 task.state = "failed"
                 task.output = f"Task execution failed: {type(exc).__name__}"
         finally:
             with self._lock:
                 task.finished_at = time.time()
-                self._process = None
-                self._active = None
+                if self._active == task.id:
+                    self._process = None
+                    self._active = None
 
     def get(self, task_id: str) -> dict:
         if not re.fullmatch(r"[0-9a-f]{32}", task_id):
@@ -114,7 +119,7 @@ class TaskQueue:
             if task_id != self._active or self._process is None:
                 return False
             self._tasks[task_id].state = "cancelled"
-            self._process.kill()
+            os.killpg(self._process.pid, signal.SIGKILL)
             return True
 
 
