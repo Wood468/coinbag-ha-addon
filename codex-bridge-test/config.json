@@ -2,7 +2,7 @@
   "name": "Codex Bridge Disposable Test",
   "slug": "codex_bridge_test",
   "description": "Disposable authenticated ingress diagnostics; Codex execution is unavailable",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "stage": "experimental",
   "url": "https://github.com/Wood468/coinbag-ha-addon/pull/16",
   "arch": [

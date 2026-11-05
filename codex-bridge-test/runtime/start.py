@@ -8,6 +8,7 @@ import re
 import sys
 import signal
 import threading
+import subprocess
 
 # Isolated Python mode excludes cwd; add only this immutable image directory.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -52,6 +53,18 @@ def main():
     if libc.prctl(38, 1, 0, 0, 0) != 0:  # PR_SET_NO_NEW_PRIVS
         raise SystemExit('Unable to enforce no-new-privileges')
     sandbox = probe()
+    # Run separately with a minimal environment and no bearer in argv/env.
+    # Bound total runtime; audit failures remain evidence failures, never passes.
+    try:
+        result = subprocess.run(
+            ['/usr/bin/python3', '-I', '-B', '/app/boundary_check.py'],
+            env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'},
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, timeout=5, check=True)
+        boundary = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        boundary = {'execution_boundary_verified': False, 'reason': 'audit_failed'}
+    sandbox['outer_container'] = boundary
     print(json.dumps({'event': 'test_bridge_started', 'execution_enabled': False,
                       'uid': os.geteuid(), 'sandbox': sandbox}), flush=True)
     queue = DiagnosticQueue(sandbox)

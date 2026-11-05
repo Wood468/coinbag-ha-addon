@@ -72,6 +72,17 @@ transport/authentication only, **not Codex execution**.
 
 ## Sandbox experiment
 
+Version 0.0.3 also runs a fixed outer-container audit in a separate unprivileged
+Python child. It opens sensitive paths without reading contents or modifying
+files, tests image-code write permissions without truncation, observes effective
+capabilities/no-new-privileges/seccomp, and attempts bounded TCP handshakes to
+Supervisor, HA Core and a fixed public address. It sends no application data.
+Reachability disproves network isolation; a timeout/refusal is recorded as
+unverified, never as a firewall pass. Missing paths establish absence only, not
+denial against a mounted secret. This audit always reports the execution boundary
+unverified and cannot enable execution. It runs once at startup, never on demand
+from a caller, and does not receive the bearer token in arguments or environment.
+
 The image uses Alpine's distribution `bubblewrap`. At startup, after dropping
 privileges, it runs one fixed probe with user/PID/network namespaces, read-only
 root, masked private `/data` and `/run`, private `/tmp` and no capabilities.

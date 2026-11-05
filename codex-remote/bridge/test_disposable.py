@@ -26,6 +26,7 @@ queue_module = load('disposable_queue', 'diagnostic_queue.py')
 probe_module = load('disposable_probe', 'sandbox_probe.py')
 server_module = load('disposable_server', 'server.py')
 startup_module = load('disposable_startup', 'start.py')
+boundary_module = load('disposable_boundary', 'boundary_check.py')
 
 
 class DisposableTests(unittest.TestCase):
@@ -157,3 +158,36 @@ class ProbeTests(unittest.TestCase):
         for stdout in [b'not json', b'{}', b'[]', b'{"x":true}']:
             self.assertEqual(self.run_probe(subprocess.CompletedProcess([], 0, stdout, b''))['status'], 'failed')
         self.assertEqual(self.run_probe(error=subprocess.TimeoutExpired('bwrap', 5))['status'], 'unavailable')
+
+
+class BoundaryTests(unittest.TestCase):
+    def test_permission_probe_never_reads_or_modifies_contents(self):
+        import tempfile
+        import os
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'public-canary'
+            path.write_text('unchanged')
+            self.assertEqual(boundary_module.inaccessible(path), 'accessible')
+            self.assertEqual(boundary_module.inaccessible(path, os.O_WRONLY), 'accessible')
+            self.assertEqual(path.read_text(), 'unchanged')
+            self.assertEqual(boundary_module.inaccessible(path.parent / 'missing'), 'absent')
+        with mock.patch.object(boundary_module.os, 'open', side_effect=PermissionError):
+            self.assertEqual(boundary_module.inaccessible('/unused'), 'denied')
+        with mock.patch.object(boundary_module.os, 'open', side_effect=OSError):
+            self.assertEqual(boundary_module.inaccessible('/unused'), 'unverified')
+
+    def test_real_tcp_positive_control_and_closed_port_are_not_security_passes(self):
+        import socket
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen(1)
+            target = listener.getsockname()
+            with mock.patch.object(boundary_module, 'TARGETS', {'control': target}):
+                result = boundary_module.check()
+            self.assertEqual(result['network']['control'], 'reachable')
+            self.assertEqual(result['reason'], 'network_reachable')
+            self.assertFalse(result['execution_boundary_verified'])
+        with mock.patch.object(boundary_module, 'TARGETS', {'control': target}):
+            result = boundary_module.check()
+        self.assertEqual(result['network']['control'], 'not_reached_unverified')
+        self.assertFalse(result['execution_boundary_verified'])
