@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+mkdir -p /data/ssh /data/codex-home /data/workspaces /data/codex-remote /run/sshd
+chown codex-remote:codex-remote /data/codex-home /data/workspaces /data/codex-remote
+chmod 700 /data/codex-home /data/codex-remote
+python3 - <<'PY'
+import json, pathlib, sys
+p = pathlib.Path("/data/options.json")
+try:
+    keys = json.loads(p.read_text()).get("authorized_keys", "")
+except (OSError, ValueError) as exc:
+    sys.exit(f"Unable to read app options: {exc}")
+lines = [x.strip() for x in keys.splitlines() if x.strip()]
+if not lines or any(not x.startswith(("ssh-ed25519 ", "ecdsa-sha2-", "ssh-rsa ")) for x in lines):
+    sys.exit("Configure a valid SSH public key in authorized_keys before starting")
+pathlib.Path("/data/ssh/authorized_keys").write_text("\n".join(lines) + "\n")
+PY
+chown root:root /data/ssh /data/ssh/authorized_keys
+chmod 755 /data/ssh
+chmod 644 /data/ssh/authorized_keys
+if [ ! -f /data/ssh/ssh_host_ed25519_key ]; then
+  ssh-keygen -q -t ed25519 -N '' -f /data/ssh/ssh_host_ed25519_key
+fi
+chmod 600 /data/ssh/ssh_host_ed25519_key
+chmod 644 /data/ssh/ssh_host_ed25519_key.pub
+/usr/sbin/sshd -t -f /etc/ssh/sshd_config
+echo "Codex Remote SSH: starting private SSH service on container port 2222"
+exec /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config
