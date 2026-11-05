@@ -1,7 +1,7 @@
 ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:latest
 FROM ${BUILD_FROM}
 
-RUN apk add --no-cache openssh-server shadow nodejs npm python3 \
+RUN apk add --no-cache openssh-server shadow nodejs npm python3 git ca-certificates \
     && npm install --global @openai/codex \
     && CODEX_BIN="$(command -v codex)" \
     && test -n "$CODEX_BIN" \
