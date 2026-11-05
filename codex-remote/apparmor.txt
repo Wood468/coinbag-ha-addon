@@ -29,6 +29,8 @@ profile codex_remote flags=(attach_disconnected,mediate_deleted) {
   /dev/pts/ptmx rw,
   /dev/pts/[0-9]* rw,
   /data/** rwk,
+  # Codex installs its managed app-server binary into its private data volume.
+  /data/codex-home/packages/** ix,
   /tmp/** rwk,
   deny /config/** rwklx,
   deny /var/run/docker.sock rwklx,
