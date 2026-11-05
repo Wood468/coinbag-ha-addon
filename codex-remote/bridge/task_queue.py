@@ -1,7 +1,6 @@
-"""Constrained, read-only Codex task queue. No HTTP listener until ingress is verified.
+"""Constrained Codex task queue prototype, not wired into the running add-on.
 
-This module intentionally contains no shell execution and never accepts a path or
-command from callers. It is not wired into the running SSH add-on.
+Execution remains disabled until container sandbox and API access are verified.
 """
 from __future__ import annotations
 
@@ -37,14 +36,17 @@ class Task:
 
 
 class TaskQueue:
-    def __init__(self, workspaces: pathlib.Path = WORKSPACES):
+    def __init__(self, workspaces: pathlib.Path = WORKSPACES, *, execution_enabled: bool = False):
         self.workspaces = workspaces
+        self.execution_enabled = execution_enabled
         self._lock = threading.Lock()
         self._tasks: dict[str, Task] = {}
         self._active: str | None = None
         self._process: subprocess.Popen | None = None
 
     def submit(self, project: str, prompt: str) -> Task:
+        if not self.execution_enabled:
+            raise RuntimeError("Execution disabled pending sandbox verification")
         if project not in PROJECTS:
             raise ValueError("Unknown project")
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > MAX_PROMPT:
@@ -94,9 +96,10 @@ class TaskQueue:
                     task.exit_code = proc.returncode
                     if task.state != "cancelled":
                         task.state = state
-        except Exception:
+        except Exception as exc:
             with self._lock:
-                task.state = "failed"
+                if task.state != "cancelled":
+                    task.state = "failed"
                 task.output = f"Task execution failed: {type(exc).__name__}"
         finally:
             with self._lock:
