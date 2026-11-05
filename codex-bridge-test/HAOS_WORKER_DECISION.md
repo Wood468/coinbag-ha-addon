@@ -38,3 +38,11 @@ See `codex-bridge-test/VALIDATION.md`, especially 0.0.3 audit:
 
 ## Decision
 The 0.0.3 findings fail both network and sandbox gates. **Do not enable unattended execution on the current HA OS add-on.** Continue implementation only if a materially different supported boundary passes negative tests, otherwise use a separately isolated Linux worker without replacing HA OS.
+
+## 2026-11-05 discovery: existing installed Codex worker (do not duplicate)
+
+Read-only Supervisor inventory confirms `8a8d906b_codex_cli_worker` v0.1.80 is the **moryoav/home-assistant-codex** implementation, already installed, and its `codex_cli` integration is loaded. It exposes Home Assistant actions for task submission, status, cancellation and conversation continuation; sensors report logged-in and zero active tasks at inspection. The add-on already has a mobile chat UI, a queued task runner and a protected custom AppArmor profile. Investigate using its **documented integration actions** as the execution transport instead of installing a third Codex worker or weakening HA OS security. This is an architectural discovery, not proof that the existing worker satisfies our separate execution isolation gates.
+
+**Security caveat:** Supervisor reports its current `codex_sandbox` option as `danger-full-access`, and the worker has read/write access to Home Assistant `/config` and `homeassistant_api:true`. This is appropriate only for consciously trusted HA administration, **not** for unattended, arbitrary repository prompts or as an isolation boundary from Home Assistant. Do not silently change the running app options or submit a Codex task. Read the upstream integration action schema and runtime security implementation, then assess a narrowly scoped existing Codex Remote SSH workspace versus using the privileged HA worker. Never route untrusted GitHub tasks to this HA-config worker in its present configuration.
+
+Sources: https://github.com/moryoav/home-assistant-codex ; https://community.home-assistant.io/t/codex-for-home-assistant-let-codex-cli-work-on-your-ha-config-from-scripts-automations-and-assist/1011929 ; https://www.reddit.com/r/homeassistant/comments/1v968qs/i_made_a_home_assistant_addon_that_lets_you_use/ .
