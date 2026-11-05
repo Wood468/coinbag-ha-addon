@@ -15,7 +15,10 @@ class QueueTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = pathlib.Path(self.temp.name)
         (self.root / "go-field-notes").mkdir()
-        self.queue = TaskQueue(self.root, execution_enabled=True)
+        self.home = self.root.parent / (self.root.name + "-codex")
+        self.home.mkdir()
+        self.addCleanup(self.home.rmdir)
+        self.queue = TaskQueue(self.root, execution_enabled=True, codex_home=self.home)
 
     def test_default_execution_disabled(self):
         queue = TaskQueue(self.root)

@@ -32,3 +32,33 @@ The current add-on uses `host_network: true` for a loopback-only SSH endpoint. *
 ## Deployment gate
 
 No production deployment until the API and network/security assumptions are tested and a working ChatGPT tool call is demonstrated. A GitHub branch or HTTP endpoint alone does not establish ChatGPT connectivity.
+
+## Implementation and current evidence
+
+See [bridge/VALIDATION.md](bridge/VALIDATION.md) for executed tests, live tool
+results, sandbox failure, and remaining gates. The isolated API and process tests
+are implemented; production connectivity is **not established**.
+
+`bridge/server.py` provides an execution-disabled loopback development API.
+`bridge/ingress.py` is a staged, execution-disabled adapter for an independent
+bridge-network test container. Neither is copied or started by the existing
+SSH app's Dockerfile/startup, and its config/version are unchanged.
+
+A future isolated test app must use `host_network: false`, `ports: {}`,
+`ingress: true`, `ingress_port: 8099`, `panel_admin: true`, a dedicated non-root
+user and volume, no `/config`/Docker mounts and no HA/Supervisor API permissions.
+Launch the adapter with `python3 ingress.py --token-file <private-file>` only
+inside that isolated container. This recipe is not a deployment instruction
+for the running SSH app.
+
+All documented requests require `Authorization: Bearer <independent-secret>`;
+POST submission also requires `Content-Type: application/json`. The connected
+`Home assistant` tool exposes the corresponding `request_headers`, `method`,
+`path`, and `body` parameters on `ha_manage_app`. Keep secrets out of chat and
+tool output. No token has been provisioned for a live bridge yet.
+
+Sources: [HA ingress isolation](https://contributors.home-assistant.io/apps/guides/ingress/),
+[Codex security](https://developers.openai.com/codex/security). Ingress authenticates
+the HA session; this command-capable API additionally requires a bearer token.
+A read-only Codex sandbox restricts writes; it does not establish credential
+isolation or safe network behavior for external tools.
