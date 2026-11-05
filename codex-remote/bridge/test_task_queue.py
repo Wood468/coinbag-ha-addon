@@ -15,7 +15,12 @@ class QueueTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = pathlib.Path(self.temp.name)
         (self.root / "go-field-notes").mkdir()
-        self.queue = TaskQueue(self.root)
+        self.queue = TaskQueue(self.root, execution_enabled=True)
+
+    def test_default_execution_disabled(self):
+        queue = TaskQueue(self.root)
+        with self.assertRaises(RuntimeError):
+            queue.submit("go-field-notes", "inspect")
 
     def test_unknown_project_rejected(self):
         with self.assertRaises(ValueError):
