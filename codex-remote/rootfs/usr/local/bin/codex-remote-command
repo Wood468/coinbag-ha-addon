@@ -22,7 +22,7 @@ if not raw:
     if not sys.stdin.isatty():
         sys.exit("Interactive Codex requires an SSH terminal (PTY)")
     actions = {
-        "1": ["--no-daemon"],
+        "1": ["--no-daemon", "--sandbox", "danger-full-access"],
         "2": ["login", "--device-auth"],
         "3": ["login", "status"],
         "4": ["--version"],
