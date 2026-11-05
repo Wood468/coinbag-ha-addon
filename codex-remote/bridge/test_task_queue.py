@@ -3,6 +3,8 @@ import pathlib
 import tempfile
 import unittest
 from unittest import mock
+import os
+import signal
 
 from task_queue import TaskQueue, redact
 
@@ -35,6 +37,14 @@ class QueueTests(unittest.TestCase):
         (self.root / "book-requests").symlink_to(self.root.parent, target_is_directory=True)
         with self.assertRaises(ValueError):
             self.queue.submit("book-requests", "check")
+
+    def test_rejects_non_string_prompt(self):
+        with self.assertRaises(ValueError):
+            self.queue.submit("go-field-notes", None)
+
+    def test_rejects_unknown_task(self):
+        with self.assertRaises(KeyError):
+            self.queue.get("a" * 32)
 
     def test_redaction(self):
         self.assertNotIn("github_pat_", redact("github_pat_" + "a" * 30))
