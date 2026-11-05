@@ -14,10 +14,6 @@ hassio_api: false
 homeassistant_api: false
 docker_api: false
 apparmor: true
-map:
-  - type: addon_config
-    read_only: false
-    path: /data
 options:
   authorized_keys: ""
 schema:
