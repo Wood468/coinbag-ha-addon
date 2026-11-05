@@ -1,5 +1,106 @@
 # Disposable HA test results — 2026-11-05
 
+## Follow-up: outer-container negative tests (0.0.3)
+
+Reviewed PR #16's current branch and commits through `92f437d`, with both GitHub
+checks passing. The local checkout was clean and matched the remote; no newer
+uncommitted Claude edits were present. Earlier commits are attributed to Dylan
+and later ones to Codex; Git metadata alone cannot establish which tool authored
+Dylan's changes. Reviewed the existing bridge guard, invocation, environment,
+authentication, process-group cancellation, retention and packaging tests.
+
+Inspected installed Claude Code 1.2.76 metadata and its public config and
+`stdin-runner.sh` source (upstream head observed:
+`25791e026cabaf0ca054c6d75173e1eb432116f8`). Claude serializes headless tasks,
+uses CLI allowed-tool permissions, times out a process group, and returns HA
+events plus persisted transcript tails. Its add-on requests root/full access,
+Docker, manager Supervisor and HA APIs, and HA/config/share/media mounts. This is
+an intentionally privileged administration architecture, not a safe substitute
+for a constrained untrusted execution worker. No credentials were read from its
+filesystem, copied, provisioned into this app, or used for model calls. Installed
+options were not printed. Claude was not invoked or modified.
+
+Built and updated **only the disposable test app** to 0.0.3 with Supervisor.
+No privileges, namespaces, mounts, security profiles or production apps changed.
+The new fixed audit executes once in an unprivileged Python child with a minimal
+environment; no bearer in argv/environment. Sensitive-path probes only open and
+close handles, never read contents; the image-write probe does not truncate or
+write. TCP probes send no application bytes. Each connect has a one-second bound
+and the whole child has a five-second timeout. HTTP callers cannot select probes,
+destinations, commands or execution policy.
+
+Actual child results, retrieved over the existing authenticated HA MCP transport:
+
+| Negative test | Result |
+| --- | --- |
+| Open this app's `/data/options.json` | Permission denied |
+| Open `/proc/1/mem` | Permission denied |
+| Open immutable image code for writing, without truncation | Permission denied |
+| HA secrets/storage and Claude credential paths | Absent; no shared mounts |
+| `/var/run/docker.sock`, `/run/docker.sock` | Absent |
+| Effective capabilities | Zero (`0000000000000000`) |
+| No-new-privileges | `1` |
+| Seccomp mode | **`0` (no filter observed)** |
+| TCP to Supervisor `172.30.32.2:80` | **Reachable — restriction fails** |
+| TCP to HA Core `172.30.32.1:8123` | **Reachable — restriction fails** |
+| TCP to fixed public IP `1.1.1.1:443` | **Reachable — restriction fails** |
+| Inner bubblewrap sandbox | **Blocked**, `Failed to make / slave: Permission denied` |
+
+Correction to earlier assumptions: retaining default Supervisor settings does
+**not** establish that a default Docker seccomp filter is active on this host.
+The observed child mode above supersedes the earlier README's claim. No seccomp
+setting was changed. A mount rejection alone does not identify the enforcing
+kernel/AppArmor policy. Absent files establish lack of exposure at those paths,
+not a general filesystem deny policy. PID 1 memory denial is a real process
+access test, not proof against every process escape. Reachable TCP establishes
+network exposure, not successful authenticated Supervisor access; no such API
+calls were attempted by the audit.
+
+Authenticated live submission returned HTTP 202 with receipt
+`dacc9bcd4d8e4e908c63d750cad2d181`; retrieval returned HTTP 200, matching ID,
+`state:blocked`, `reason:execution_disabled`, empty output and null exit code.
+Missing bearer returned 401; attempting an HTTP execution-enable field returned
+400. The previous redacted option value was unusable for authentication; rotated
+only this disposable app's independent token using cryptographic randomness,
+without displaying or committing it. True Supervisor ingress remains unverified.
+
+The separate Supervisor-managed container provides useful file/process
+separation, but **does not supply the required complete execution boundary**.
+Ordinary `ports:{}` disables host publishing, not container egress. The documented
+app config does not provide a destination egress allowlist or per-app custom
+seccomp selector. A firewall inside a task-accessible privileged container, host
+network changes, security-profile relaxation, and Codex bypass flags were not
+used. No safe solution on this retained HA policy has been demonstrated. A
+separately provisioned Linux VM/worker with working supported Codex isolation and
+independently scoped credentials remains necessary unless a supported HA runtime
+mechanism can pass these gates. No external worker is available in this session.
+No real Codex/model task has run, and no production deployment is authorized by
+these results.
+
+Verification for implementation commit `48df1d9`: **40 bridge tests** pass locally
+with ResourceWarning fatal; GitHub `bridge-tests` independently passes all 40.
+GitHub `static-checks` passes all **15 repository regression tests**, Python
+compilation, service syntax/config validation and the Coin Bag Docker build.
+The local broader suite could not import `dbus_fast`; attempts to provision a
+temporary venv hit the existing AppArmor filesystem policy, which was preserved.
+CI installed the declared dependencies and verified the full suite instead.
+The disposable image itself built and started successfully under Supervisor.
+Python compilation and `git diff --check` pass locally.
+
+Final state: disposable 0.0.3 **stopped**, manual boot, auto-update false,
+`mcp_gateway_access:false`. Execution remains hard-disabled. Claude Code,
+Codex Remote SSH and Codex CLI Worker retained their running versions. Core and
+Supervisor were not restarted, reconfigured or upgraded.
+
+Sources: [Claude add-on configuration](https://github.com/robsonfelix/robsonfelix-hass-addons/blob/25791e026cabaf0ca054c6d75173e1eb432116f8/claudecode/config.yaml),
+[Claude headless runner](https://github.com/robsonfelix/robsonfelix-hass-addons/blob/25791e026cabaf0ca054c6d75173e1eb432116f8/claudecode/stdin-runner.sh),
+[supported HA configuration](https://contributors.home-assistant.io/apps/reference/configuration/),
+[OpenAI isolation guidance](https://learn.chatgpt.com/docs/agent-approvals-security),
+[OpenAI permissions](https://learn.chatgpt.com/docs/permissions).
+
+The sections below preserve the earlier 0.0.2 experiment and its historical
+state. The follow-up above is the latest result.
+
 ## Scope and final state
 
 Built and installed only `f40151c9_codex_bridge_test` from development repository

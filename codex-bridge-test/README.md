@@ -8,7 +8,9 @@ It does not change Codex Remote SSH or Codex CLI Worker.
 - Supervisor-only ingress on 8099; optional bearer-authenticated MCP gateway
   listener on internal port 8100 (off by default). No host ports, host network, host PID/IPC/DBus, shared
   mounts, Docker socket/API, HA API, elevated capabilities or protection changes.
-- Default Docker AppArmor and seccomp restrictions remain enabled.
+- Retains Supervisor protection and default AppArmor. No seccomp override is
+  requested; actual seccomp enforcement must be measured (the live 0.0.3 child
+  reported `Seccomp:0`, so filtering must not be assumed).
 - Drops to UID 10001, clears inherited environment (including Supervisor tokens),
   and sets no-new-privileges before the startup probe or HTTP server.
 - Requires both the actual Supervisor socket peer (`172.30.32.2`) and an
