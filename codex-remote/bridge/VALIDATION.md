@@ -125,3 +125,17 @@ with a permission error for `/lib/ld-musl-x86_64.so.1`. No system packages or
 running app files were changed to work around it. The existing validation CI
 installs its declared Bluetooth dependencies and remains the authority for that
 unrelated suite; the bridge suite requires only the Python standard library.
+
+## Follow-up: disposable HA app validation
+
+The subsequent disposable-app experiment is documented in
+[../../codex-bridge-test/VALIDATION.md](../../codex-bridge-test/VALIDATION.md).
+Its separate container built successfully on HA OS. Connected-interface health,
+blocked task receipt submission/retrieval, authentication rejection and restart
+semantics were exercised live using a separate authenticated internal listener.
+True Supervisor ingress remains unverified because the installed MCP tool uses
+a direct sibling-container route. The actual HA bubblewrap probe failed with
+`bwrap: Failed to make / slave: Permission denied`; execution is still unavailable.
+The disposable app is stopped and its optional listener disabled. Both original
+Codex apps are unchanged and running. This supersedes the earlier statement that
+no test app exists, without establishing any real Codex execution success.

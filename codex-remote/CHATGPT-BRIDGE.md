@@ -62,3 +62,11 @@ Sources: [HA ingress isolation](https://contributors.home-assistant.io/apps/guid
 the HA session; this command-capable API additionally requires a bearer token.
 A read-only Codex sandbox restricts writes; it does not establish credential
 isolation or safe network behavior for external tools.
+
+## Disposable test app
+
+[../codex-bridge-test/README.md](../codex-bridge-test/README.md) packages a separate
+execution-unavailable app. Its [validation report](../codex-bridge-test/VALIDATION.md)
+records actual connected-interface receipt tests and the remaining ingress-route
+and sandbox blockers. This test app does not replace or modify the SSH app or
+CLI Worker, and a blocked receipt is not Codex execution.
