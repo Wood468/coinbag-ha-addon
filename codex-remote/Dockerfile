@@ -8,6 +8,7 @@ RUN apk add --no-cache openssh-server shadow nodejs npm python3 \
     && if [ "$CODEX_BIN" != "/usr/local/bin/codex" ]; then ln -s "$CODEX_BIN" /usr/local/bin/codex; fi \
     && addgroup -S codex-remote \
     && adduser -S -D -H -h /data/codex-remote -s /bin/sh -G codex-remote codex-remote \
+    && usermod -p 'NP' codex-remote \
     && mkdir -p /data/ssh /data/codex-home /data/workspaces /run/sshd \
     && chown -R codex-remote:codex-remote /data/codex-home /data/workspaces \
     && chmod 700 /data/ssh /data/codex-home
