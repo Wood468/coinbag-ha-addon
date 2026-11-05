@@ -24,6 +24,9 @@ TARGETS = {
     'homeassistant_tcp_denied': ('172.30.32.1', 8123),
     # Fixed numeric address avoids DNS errors masquerading as network isolation.
     'internet_tcp_denied': ('1.1.1.1', 443),
+    # IPv4 denial does not imply IPv6 denial. A reachable IPv6 destination
+    # must fail the audit too; unavailable IPv6 is inconclusive, not a pass.
+    'internet_ipv6_tcp_denied': ('2606:4700:4700::1111', 443),
 }
 
 
