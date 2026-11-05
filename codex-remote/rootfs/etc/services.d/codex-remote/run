@@ -1,0 +1,24 @@
+#!/usr/bin/with-contenv bashio
+set -euo pipefail
+mkdir -p /data/ssh /data/codex-home /data/workspaces /run/sshd
+chmod 700 /data/ssh /data/codex-home
+chown -R codex-remote:codex-remote /data/codex-home /data/workspaces
+KEYS="$(bashio::config 'authorized_keys')"
+if [ -z "${KEYS//[[:space:]]/}" ]; then
+  bashio::log.fatal "Set authorized_keys to a dedicated public key before starting."
+  exit 1
+fi
+printf '%s\n' "$KEYS" > /data/ssh/authorized_keys
+chown root:root /data/ssh/authorized_keys
+chmod 600 /data/ssh/authorized_keys
+if [ ! -f /data/ssh/ssh_host_ed25519_key ]; then
+  ssh-keygen -q -t ed25519 -N '' -f /data/ssh/ssh_host_ed25519_key
+fi
+chmod 600 /data/ssh/ssh_host_ed25519_key
+chmod 644 /data/ssh/ssh_host_ed25519_key.pub
+if [ ! -f /data/codex-home/auth.json ]; then
+  su -s /bin/sh codex-remote -c 'HOME=/data/codex-remote CODEX_HOME=/data/codex-home /usr/local/bin/codex login --device-auth' \
+    >/data/codex-device-auth.log 2>&1 &
+  bashio::log.warning "Device auth started. Complete the URL/code in /data/codex-device-auth.log before using SSH."
+fi
+/usr/sbin/sshd -D -e
