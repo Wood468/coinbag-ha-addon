@@ -14,8 +14,6 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-from task_queue import TaskQueue
-
 MAX_BODY = 8192
 MAX_CONNECTIONS = 16
 
@@ -32,7 +30,10 @@ class BridgeServer(ThreadingHTTPServer):
             raise ValueError("Non-ingress development servers must bind loopback")
         self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
         self.token = token
-        self.queue = queue if queue is not None else TaskQueue()
+        if queue is None:
+            from task_queue import TaskQueue
+            queue = TaskQueue()
+        self.queue = queue
         self.ingress_only = ingress_only
         super().__init__(address, Handler)
 
@@ -89,8 +90,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Transfer-Encoding") or len(self.headers.get_all("Content-Length", [])) > 1:
             return self._json(400, {"error": "ambiguous body framing"})
         if path == "/api/health" and self.command == "GET":
-            return self._json(200, {"status": "ok", "mode": "read-only",
-                                    "execution_enabled": self.server.queue.execution_enabled})
+            health = {"status": "ok", "mode": "read-only",
+                      "execution_enabled": self.server.queue.execution_enabled}
+            if hasattr(self.server.queue, "health"):
+                health.update(self.server.queue.health())
+            return self._json(200, health)
         if path == "/api/tasks" and self.command == "POST":
             length = self.headers.get("Content-Length", "")
             if not length.isascii() or not length.isdecimal() or len(length) > 5 or not (1 <= int(length) <= MAX_BODY):
