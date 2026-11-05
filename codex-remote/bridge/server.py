@@ -38,7 +38,7 @@ class Handler(BaseHTTPRequestHandler):
     def _route(self):
         path = urlsplit(self.path).path
         if path == "/api/health" and self.command == "GET":
-            return self._json(200, {"status": "ok", "mode": "prototype"})
+            return self._json(200, {"status": "ok", "mode": "prototype", "execution_enabled": False})
         if not self._authorized():
             return self._json(401, {"error": "unauthorized"})
         if path == "/api/tasks" and self.command == "POST":
@@ -53,7 +53,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(202, {"id": task.id, "state": task.state})
             except (ValueError, TypeError, KeyError):
                 return self._json(400, {"error": "invalid task"})
-            except RuntimeError:
+            except RuntimeError as exc:
+                if str(exc).startswith("Execution disabled"):
+                    return self._json(503, {"error": "execution disabled"})
                 return self._json(409, {"error": "busy"})
             except (OSError, FileNotFoundError):
                 return self._json(503, {"error": "workspace unavailable"})
