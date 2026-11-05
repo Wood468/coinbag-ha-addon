@@ -10,6 +10,8 @@ profile codex_remote flags=(attach_disconnected,mediate_deleted) {
   capability dac_override,
   capability fowner,
   capability sys_chroot,
+  /init rix,
+  /package/** rix,
   /usr/** rix,
   /bin/** rix,
   /sbin/** rix,
