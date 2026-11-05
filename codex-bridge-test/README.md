@@ -5,7 +5,8 @@ and task receipt transport without running Codex or model-generated commands.
 It does not change Codex Remote SSH or Codex CLI Worker.
 
 - Separate slug `codex_bridge_test` and Supervisor-managed private `/data`.
-- Ingress port 8099 only; no host ports, host network, host PID/IPC/DBus, shared
+- Supervisor-only ingress on 8099; optional bearer-authenticated MCP gateway
+  listener on internal port 8100 (off by default). No host ports, host network, host PID/IPC/DBus, shared
   mounts, Docker socket/API, HA API, elevated capabilities or protection changes.
 - Default Docker AppArmor and seccomp restrictions remain enabled.
 - Drops to UID 10001, clears inherited environment (including Supervisor tokens),
@@ -32,6 +33,22 @@ removing its data discards its private token. Remove the development repository
 only after its test app is uninstalled.
 
 ## API and expected results
+
+All requests require `Authorization: Bearer <independent-secret>`.
+
+The installed HA MCP 9.0.0 runs on the host network. Its `ha_manage_app` app-mode
+route contacts the target directly and merely adds ingress-looking headers.
+Those headers do not establish authentication and do not pass the Supervisor
+socket-peer check. To test this connector without weakening ingress, set this
+test app's `mcp_gateway_access:true` and call `ha_manage_app(..., port=8100)`.
+That distinct internal listener only accepts the hassio gateway `172.30.32.1`
+and requires the same independent bearer. Other host-network apps share that
+address; the bearer is the caller credential, not the source IP. Port 8100 has
+no host mapping. The ingress listener remains restricted to `172.30.32.2`.
+This proves the connected interface path, **not true Supervisor ingress**.
+A connector that actually forwards through Supervisor ingress is still needed
+to test that path. Set `mcp_gateway_access:false` or stop the test app to disable
+the optional listener.
 
 All requests require `Authorization: Bearer <independent-secret>`. Requests are
 made through `Home assistant`'s `ha_manage_app`, using the discovered **test** slug,

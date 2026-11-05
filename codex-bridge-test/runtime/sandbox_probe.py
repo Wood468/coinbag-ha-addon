@@ -37,10 +37,12 @@ def probe():
                     'codex_sandbox_verified': False}
         # No raw stderr: never expose paths, options or credentials in diagnostics.
         if result.returncode != 0:
-            namespace_error = b'namespace' in result.stderr.lower() or b'operation not permitted' in result.stderr.lower()
+            namespace_error = any(word in result.stderr.lower() for word in (b'namespace', b'operation not permitted', b'permission denied', b'uid map'))
             return {'status': 'blocked', 'exit_code': result.returncode,
                     'reason': 'namespace_or_policy_denied' if namespace_error else 'probe_failed',
-                    'codex_sandbox_verified': False}
+                    'codex_sandbox_verified': False,
+                    # Only fixed bubblewrap diagnostics; probe env contains no secrets.
+                    'detail': result.stderr[:512].decode('ascii', errors='replace').strip()}
         try:
             checks = json.loads(result.stdout)
             passed = isinstance(checks, dict) and set(checks) == CHECKS and all(v is True for v in checks.values())

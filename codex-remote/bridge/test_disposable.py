@@ -25,6 +25,7 @@ def load(name, filename):
 queue_module = load('disposable_queue', 'diagnostic_queue.py')
 probe_module = load('disposable_probe', 'sandbox_probe.py')
 server_module = load('disposable_server', 'server.py')
+startup_module = load('disposable_startup', 'start.py')
 
 
 class DisposableTests(unittest.TestCase):
@@ -80,6 +81,17 @@ class DisposableTests(unittest.TestCase):
         with self.assertRaises(AttributeError):
             self.queue.execution_enabled = True
         self.assertEqual(self.request('POST', '/api/enable', {})[0], 404)
+
+    def test_gateway_policy_is_distinct_from_ingress(self):
+        gateway = startup_module.GatewayServer(('127.0.0.1', 0), token=self.token,
+                                              queue=self.queue, ingress_only=True)
+        self.addCleanup(gateway.server_close)
+        self.assertTrue(gateway.verify_request(None, ('172.30.32.1', 123)))
+        for peer in ['172.30.32.2', '172.30.33.5', '127.0.0.1', '192.168.1.2']:
+            self.assertFalse(gateway.verify_request(None, (peer, 123)))
+        self.server.ingress_only = True
+        self.assertTrue(self.server.verify_request(None, ('172.30.32.2', 123)))
+        self.assertFalse(self.server.verify_request(None, ('172.30.32.1', 123)))
 
     def test_retention_and_restart_are_explicit(self):
         with mock.patch.object(queue_module, 'MAX_TASKS', 2):
