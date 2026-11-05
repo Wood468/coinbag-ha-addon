@@ -1,7 +1,9 @@
 #!/bin/sh
 set -eu
 mkdir -p /data/ssh /data/codex-home /data/workspaces /data/codex-remote /run/sshd
-mkdir -p /data/workspaces/go-field-notes /data/workspaces/atlas /data/workspaces/book-requests /data/codex-remote/.config\nchown -R codex-remote:codex-remote /data/workspaces /data/codex-remote\nchown codex-remote:codex-remote /data/codex-home
+mkdir -p /data/workspaces/go-field-notes /data/workspaces/atlas /data/workspaces/book-requests /data/codex-remote/.config
+chown -R codex-remote:codex-remote /data/workspaces /data/codex-remote
+chown codex-remote:codex-remote /data/codex-home
 chmod 700 /data/codex-home /data/codex-remote
 python3 - <<'PY'
 import json, pathlib, sys
