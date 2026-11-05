@@ -16,4 +16,6 @@ COPY rootfs/ /
 RUN chmod 0755 /usr/local/bin/codex-remote-command \
     /etc/cont-init.d/00-codex-remote \
     /etc/services.d/codex-remote/run
-ENTRYPOINT ["/init"]
+COPY start-codex-remote /usr/local/bin/start-codex-remote
+RUN chmod 0755 /usr/local/bin/start-codex-remote
+ENTRYPOINT ["/usr/local/bin/start-codex-remote"]
