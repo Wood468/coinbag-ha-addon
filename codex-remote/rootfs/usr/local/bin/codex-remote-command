@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Restricted SSH gateway for the isolated Codex add-on."""
 import os
+import getpass
 import shlex
 import subprocess
 import sys
@@ -33,14 +34,42 @@ if not raw:
         print("2. Sign in to Codex (device authentication)")
         print("3. Check Codex login status")
         print("4. Show Codex version")
-        print("5. Exit")
+        print("5. Connect GitHub (paste restricted token privately)")
+        print("6. Check GitHub login")
+        print("7. Exit")
         try:
-            choice = input("Choose 1–5: ").strip()
+            choice = input("Choose 1–7: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\\nGoodbye")
             sys.exit(0)
-        if choice == "5":
+        if choice == "7":
             sys.exit(0)
+        if choice == "5":
+            print("Paste your repository-limited GitHub token. Input is hidden.", flush=True)
+            try:
+                token = getpass.getpass("GitHub token (hidden): ").strip()
+                if not token:
+                    print("No token entered", flush=True)
+                    continue
+                result = subprocess.run(
+                    ["/usr/bin/gh", "auth", "login", "--hostname", "github.com", "--with-token"],
+                    input=token + "\n", text=True, env=env, cwd="/data/workspaces",
+                    capture_output=True, check=False, timeout=60,
+                )
+                token = ""
+                if result.returncode == 0:
+                    print("GitHub CLI authenticated. Verify with menu option 6.", flush=True)
+                else:
+                    print(f"GitHub login failed (exit {result.returncode}). Token not displayed.", flush=True)
+            except (EOFError, KeyboardInterrupt):
+                print("Authentication cancelled", flush=True)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                print(f"GitHub login could not complete: {type(exc).__name__}", flush=True)
+            continue
+        if choice == "6":
+            result = subprocess.run(["/usr/bin/gh", "auth", "status"], env=env, cwd="/data/workspaces", check=False)
+            print(f"GitHub status exit code: {result.returncode}", flush=True)
+            continue
         if choice not in actions:
             print("Invalid selection", flush=True)
             continue
