@@ -1,0 +1,20 @@
+name: Codex bridge prototype tests
+
+on:
+  pull_request:
+    paths:
+      - 'codex-remote/bridge/**'
+      - '.github/workflows/codex-bridge-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bridge-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run isolated Python tests
+        run: python3 -m unittest discover -s codex-remote/bridge -p 'test_*.py' -v
