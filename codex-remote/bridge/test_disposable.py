@@ -176,6 +176,22 @@ class BoundaryTests(unittest.TestCase):
         with mock.patch.object(boundary_module.os, 'open', side_effect=OSError):
             self.assertEqual(boundary_module.inaccessible('/unused'), 'unverified')
 
+
+    def test_ipv6_egress_is_a_required_negative_probe(self):
+        target = boundary_module.TARGETS['internet_ipv6_tcp_denied']
+        self.assertEqual(target, ('2606:4700:4700::1111', 443))
+        # Mock an IPv6-capable host: successful IPv6 egress must block approval
+        # even when every other target is unreachable.
+        def connect(address, timeout):
+            if address == target:
+                return mock.MagicMock()
+            raise OSError('unreachable')
+        with mock.patch.object(boundary_module.socket, 'create_connection', side_effect=connect):
+            result = boundary_module.check()
+        self.assertEqual(result['network']['internet_ipv6_tcp_denied'], 'reachable')
+        self.assertEqual(result['reason'], 'network_reachable')
+        self.assertFalse(result['execution_boundary_verified'])
+
     def test_real_tcp_positive_control_and_closed_port_are_not_security_passes(self):
         import socket
         with socket.socket() as listener:
