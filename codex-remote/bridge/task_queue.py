@@ -73,7 +73,7 @@ class TaskQueue:
         try:
             env = {key: value for key, value in os.environ.items()
                    if key in ("HOME", "PATH", "CODEX_HOME", "LANG", "TERM")}
-            command = ["codex", "--no-daemon", "exec", "--sandbox", "read-only",
+            command = ["codex", "exec", "--sandbox", "read-only",
                        "--skip-git-repo-check", "-C", str(workspace), prompt]
             with subprocess.Popen(
                 command, cwd=str(workspace), env=env, shell=False,
