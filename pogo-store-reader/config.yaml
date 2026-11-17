@@ -1,0 +1,23 @@
+name: Pokemon GO Store Reader
+version: "0.1.0"
+slug: pogo_store_reader
+description: Reads the Pokemon GO web store from your home connection (Australian prices) and uploads it to your app.
+url: https://github.com/Wood468/coinbag-ha-addon
+arch:
+  - amd64
+startup: services
+boot: manual
+init: false
+homeassistant_api: false
+hassio_api: false
+options:
+  ingest_url: "https://pogo.michaelpuff.com/api/store-ingest"
+  interval_minutes: 60
+  jitter_minutes: 10
+  run_on_start: true
+schema:
+  ingest_url: url
+  ingest_key: password(32,)
+  interval_minutes: int(30,)
+  jitter_minutes: int(0,)
+  run_on_start: bool
