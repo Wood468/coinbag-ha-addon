@@ -129,6 +129,12 @@ class FlowTests(unittest.TestCase):
         self.assertNotIn("abc", out)
         self.assertTrue(all(len(l) < 240 for l in out.splitlines()))
 
+    def test_preflight_logged_without_key(self):
+        rc, out = self.run_main()
+        self.assertIn("preflight: python=", out)
+        self.assertRegex(out, r"playwright import (ok|FAILED)")
+        self.assertNotIn(KEY, out)
+
     def test_run_on_start_false_waits_first(self):
         Path(self.opts).write_text(json.dumps({"ingest_key": KEY, "interval_minutes": 45, "jitter_minutes": 0, "run_on_start": False}))
         self.run_main()
@@ -149,6 +155,10 @@ class StaticTests(unittest.TestCase):
         self.assertIn("interval_minutes: int(30,)", cfg)
         self.assertNotIn("ingest_key:", cfg.split("schema:")[0])  # no default key
         self.assertIn("playwright/python:v1.49.0", (d / "Dockerfile").read_text())
+        df = (d / "Dockerfile").read_text()
+        self.assertIn("playwright==1.49.0", df)
+        self.assertIn("playwright install --with-deps chromium", df)
+        self.assertIn("chromium.launch()", df)
         self.assertIn("1ff10302cc327a5fe65721924806a8b9e919cf3b", (d / "store_snapshot.py.source").read_text())
 
 
