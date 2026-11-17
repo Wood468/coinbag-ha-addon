@@ -126,6 +126,47 @@ def dry_check(raw):
     return None
 
 
+def _name(v):
+    """Short, printable-ASCII rendering of a public store section name."""
+    return "".join(c if 32 <= ord(c) < 127 else "?" for c in str(v))[:40]
+
+
+def section_diag(raw, max_lines=20):
+    """Lines comparing what the Worker compares (completeness.cards / sections[].count vs the kept items per section).
+    Numbers and short section names only: no hrefs, prices, item names or key."""
+    try:
+        data = json.loads(raw)
+        items = data["items"]
+        comp = data.get("completeness") or {}
+        secs = comp.get("sections") or []
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return ["diag: snapshot has no readable items/completeness"]
+    tally = {}
+    for i in items:
+        k = i.get("section") if isinstance(i, dict) else None
+        tally[k] = tally.get(k, 0) + 1
+    total = sum(s.get("count", 0) for s in secs if isinstance(s, dict) and isinstance(s.get("count"), int))
+    out = ["diag: cards_stated=%s section_counts_sum=%d items=%d nameless_cards=%d sections=%d item_sections=%d" % (
+        comp.get("cards"), total, len(items), total - len(items), len(secs), len(tally))]
+    named = set()
+    rows = []
+    for s in secs:
+        if not isinstance(s, dict):
+            continue
+        n = s.get("name")
+        named.add(n)
+        c = tally.get(n, 0)
+        flag = "" if c == s.get("count") else " MISMATCH"
+        if c == 0 and s.get("count") == 0:
+            flag = " EMPTY_SECTION"
+        rows.append("diag: section=%s cards=%s items=%d%s" % (_name(n), s.get("count"), c, flag))
+    for n, c in tally.items():
+        if n not in named:
+            rows.append("diag: section=%s cards=- items=%d NOT_IN_EVIDENCE" % (_name(n), c))
+    rows.sort(key=lambda r: ("MISMATCH" not in r and "EMPTY" not in r and "NOT_IN" not in r))  # problems first
+    return out + rows[:max_lines - 1]
+
+
 def safe_tail(out, err, key="", lines=5, width=200):
     """Last few non-empty lines of the snapshot's stderr then stdout, redacted and truncated for the log."""
     text = (out or b"").decode("utf-8", "replace") + "\n" + (err or b"").decode("utf-8", "replace")
@@ -201,6 +242,9 @@ def run_cycle(cfg):
         if rule:
             log("local check: would likely be rejected (rule=%s); uploading anyway so the server's reason is logged" % rule)
         status, reason = post(cfg, path)
+        if reason in ("section_mismatch", "cards_mismatch"):
+            for line in section_diag(raw):
+                log(line)
     if status in (200, 409, 429):
         log("uploaded: items=%d http=%d%s" % (count, status, "" if status == 200 else " (already have it)"))
         return "ok"
