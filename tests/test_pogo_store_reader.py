@@ -171,6 +171,33 @@ class FlowTests(unittest.TestCase):
         self.assertNotIn("example.com", out)
         self.assertEqual(self.n_posts(), 1)
 
+    def test_section_mismatch_diag_logged(self):
+        d = {"fetched": "x", "items": [
+            {"name": "SECRETNAME", "section": "daily", "price": "A$1.00", "href": "/purchase/SECRETHREF"},
+            {"name": "b", "section": "daily", "price": "A$2.00"}, {"name": "c", "section": "extra\u00e9", "price": "A$3.00"}],
+            "completeness": {"schema": 1, "cards": 3, "sections": [
+                {"name": "daily", "count": 2}, {"name": "empty", "count": 0}, {"name": "x" * 60, "count": 1}]}}
+        self.body.write_text(json.dumps(d))
+        os.environ.update(FAKE_STATUS="400", FAKE_BODY='{"reason":"section_mismatch"}')
+        rc, out = self.run_main()
+        self.assertIn("diag: cards_stated=3 section_counts_sum=3 items=3 nameless_cards=0 sections=3 item_sections=2", out)
+        self.assertIn("section=empty cards=0 items=0 EMPTY_SECTION", out)
+        self.assertIn("section=extra? cards=- items=1 NOT_IN_EVIDENCE", out)
+        self.assertIn("section=%s cards=1 items=0 MISMATCH" % ("x" * 40), out)
+        self.assertNotIn("x" * 41, out)
+        for secret in ("SECRETNAME", "SECRETHREF", "A$", KEY):
+            self.assertNotIn(secret, out)
+
+    def test_no_diag_for_other_reasons(self):
+        os.environ.update(FAKE_STATUS="400", FAKE_BODY='{"reason":"img_host"}')
+        rc, out = self.run_main()
+        self.assertNotIn("diag:", out)
+
+    def test_diag_line_cap(self):
+        secs = [{"name": "s%d" % i, "count": 1} for i in range(50)]
+        raw = json.dumps({"items": [], "completeness": {"cards": 50, "sections": secs}})
+        self.assertLessEqual(len(reader.section_diag(raw)), 20)
+
     def test_us_snapshot_not_uploaded(self):
         self.body.write_text(json.dumps(US))
         rc, out = self.run_main()
