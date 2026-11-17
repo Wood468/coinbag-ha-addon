@@ -34,6 +34,37 @@ class CheckAuTests(unittest.TestCase):
             self.assertIsNotNone(reader.check_au(raw)[1], raw)
 
 
+GOOD_ITEM = {"name": "n", "section": "s", "price": "A$1.00", "href": "/purchase/abc?x=1",
+             "imgs": ["https://assets.pgo.webstore.nianticlabs.com/a.png"]}
+
+
+def snap(**over):
+    i = dict(GOOD_ITEM)
+    i.update(over)
+    return json.dumps({"fetched": "2026-11-17T00:00:00Z", "items": [i]})
+
+
+class DryCheckTests(unittest.TestCase):
+    def test_good_passes(self):
+        self.assertIsNone(reader.dry_check(snap()))
+
+    def test_rules_named(self):
+        cases = {
+            "img_not_https": snap(imgs=["http://assets.pgo.webstore.nianticlabs.com/a.png"]),
+            "img_host": snap(imgs=["https://example.com/a.png"]),
+            "imgs_bad_or_over_6": snap(imgs=["https://assets.pgo.webstore.nianticlabs.com/a"] * 7),
+            "href_not_purchase_path": snap(href="//evil.com/purchase/x"),
+            "name_bad": snap(name="x" * 201),
+            "section_bad": snap(section=""),
+            "tag_too_long": snap(tag="x" * 301),
+            "too_many_items": json.dumps({"fetched": "x", "items": [GOOD_ITEM] * 401}),
+            "size_over_256kb": snap(name="x" * 200, tag="y" * 300) + " " * (256 * 1024),
+            "not_json": "{nope",
+        }
+        for rule, raw in cases.items():
+            self.assertEqual(reader.dry_check(raw), rule, rule)
+
+
 class FlowTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -44,7 +75,9 @@ class FlowTests(unittest.TestCase):
         self.body = t / "body.json"
         self.body.write_text(json.dumps(AU))
         curl = t / "curl"
-        curl.write_text('#!/bin/sh\necho x >> "%s"\necho "$@" > "%s"\ncat > "%s"\nprintf "%%s" "$FAKE_STATUS"\n'
+        curl.write_text('#!/bin/sh\necho x >> "%s"\necho "$@" > "%s"\ncat > "%s"\n'
+                        'while [ $# -gt 0 ]; do if [ "$1" = -o ]; then printf "%%s" "$FAKE_BODY" > "$2"; fi; shift; done\n'
+                        'printf "%%s" "$FAKE_STATUS"\n'
                         % (self.calls, self.args_log, self.stdin_log))
         curl.chmod(curl.stat().st_mode | stat.S_IEXEC)
         snap = t / "snap.py"
@@ -54,7 +87,7 @@ class FlowTests(unittest.TestCase):
         opts.write_text(json.dumps({"ingest_key": KEY, "interval_minutes": 30, "jitter_minutes": 0, "run_on_start": True}))
         self.opts = str(opts)
         reader.CURL, reader.SNAPSHOT_SCRIPT = str(curl), str(snap)
-        os.environ.update(SNAP_KEY=KEY, SNAP_BODY=str(self.body), FAKE_STATUS="200")
+        os.environ.update(SNAP_KEY=KEY, SNAP_BODY=str(self.body), FAKE_STATUS="200", FAKE_BODY="")
         os.environ.pop("SNAP_FAIL", None)
         self.sleeps = []
 
@@ -111,6 +144,32 @@ class FlowTests(unittest.TestCase):
         self.run_main()
         self.assertEqual(self.n_posts(), 2)
         self.assertEqual(self.sleeps, [300])
+
+    def test_400_logs_only_a_valid_reason(self):
+        os.environ["FAKE_STATUS"] = "400"
+        for body, want in (('{"error":"Bad request.","reason":"img_host"}', "reason=img_host"),
+                           ('{"reason":"Has Spaces & secrets %s"}' % KEY, None),
+                           ('{"reason":"%s"}' % ("a" * 33), None),
+                           ("<html>nope", None), ('{"error":"leak-me"}', None)):
+            os.environ["FAKE_BODY"] = body
+            rc, out = self.run_main()
+            self.assertIn("upload failed: http=400", out)
+            self.assertNotIn(KEY, out)
+            self.assertNotIn("leak-me", out)
+            if want:
+                self.assertIn(want, out)
+            else:
+                self.assertNotIn("reason=", out.split("upload failed")[1])
+
+    def test_dry_check_failure_is_logged_but_still_uploads(self):
+        self.body.write_text(snap(imgs=["https://example.com/a.png"]))
+        d = json.loads(self.body.read_text())
+        d["items"] = d["items"] * 3
+        self.body.write_text(json.dumps(d))
+        rc, out = self.run_main()
+        self.assertIn("rule=img_host", out)
+        self.assertNotIn("example.com", out)
+        self.assertEqual(self.n_posts(), 1)
 
     def test_us_snapshot_not_uploaded(self):
         self.body.write_text(json.dumps(US))
