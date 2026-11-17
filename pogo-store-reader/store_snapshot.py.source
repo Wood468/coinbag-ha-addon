@@ -1,0 +1,7 @@
+store_snapshot.py is vendored verbatim (not edited).
+repo: Wood468/crispy-barnacle
+path: scripts/store_snapshot.py
+last commit touching it (as of 2026-11-17): 1ff10302cc327a5fe65721924806a8b9e919cf3b
+git blob sha: 8d3eec1d14bbe748f3bec658a8d479382b65ec2d
+contract: docs/store-home-reader.md (merged in main via #876)
+To update: re-fetch the file, replace it, and update this record.

@@ -1,0 +1,151 @@
+"""Behavior checks for the Pokemon GO store reader add-on (fake curl and snapshot, no network)."""
+import contextlib
+import io
+import json
+import os
+import stat
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "pogo-store-reader"))
+import reader  # noqa: E402
+
+KEY = "k" * 40
+AU = {"items": [{"name": "a", "price": "A$1.99"}, {"name": "b", "price": "A$4.99"}, {"name": "c", "price": "A$0.00"}]}
+US = {"items": [{"name": "a", "price": "US$0.99"}, {"name": "b", "price": "US$4.99"}, {"name": "c", "price": "A$1.00"}]}
+
+
+class CheckAuTests(unittest.TestCase):
+    def test_au_snapshot_passes(self):
+        self.assertEqual(reader.check_au(json.dumps(AU)), (3, None))
+
+    def test_us_price_rejected(self):
+        self.assertIsNotNone(reader.check_au(json.dumps(US))[1])
+
+    def test_unmarked_prices_rejected(self):
+        d = {"items": [{"price": "$1.99"}, {"price": "$2.99"}, {"price": "A$1"}]}
+        self.assertIsNotNone(reader.check_au(json.dumps(d))[1])
+
+    def test_empty_invalid_and_itemless_rejected(self):
+        for raw in ("", "  \n", "{not json", "[]", '{"items": []}', '{"items": 5}'):
+            self.assertIsNotNone(reader.check_au(raw)[1], raw)
+
+
+class FlowTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        t = Path(self.tmp.name)
+        self.calls = t / "calls"
+        self.stdin_log = t / "stdin"
+        self.args_log = t / "args"
+        self.body = t / "body.json"
+        self.body.write_text(json.dumps(AU))
+        curl = t / "curl"
+        curl.write_text('#!/bin/sh\necho x >> "%s"\necho "$@" > "%s"\ncat > "%s"\nprintf "%%s" "$FAKE_STATUS"\n'
+                        % (self.calls, self.args_log, self.stdin_log))
+        curl.chmod(curl.stat().st_mode | stat.S_IEXEC)
+        snap = t / "snap.py"
+        snap.write_text("import os,sys\nif os.environ.get('SNAP_FAIL'): sys.exit(3)\n"
+                        "open(sys.argv[1],'w').write(open(os.environ['SNAP_BODY']).read())\n")
+        opts = t / "options.json"
+        opts.write_text(json.dumps({"ingest_key": KEY, "interval_minutes": 30, "jitter_minutes": 0, "run_on_start": True}))
+        self.opts = str(opts)
+        reader.CURL, reader.SNAPSHOT_SCRIPT = str(curl), str(snap)
+        os.environ.update(SNAP_BODY=str(self.body), FAKE_STATUS="200")
+        os.environ.pop("SNAP_FAIL", None)
+        self.sleeps = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_main(self, cycles=1):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = reader.main(self.opts, sleep=self.sleeps.append, rand=lambda a, b: 0, max_cycles=cycles)
+        return rc, buf.getvalue()
+
+    def n_posts(self):
+        return len(self.calls.read_text().split()) if self.calls.exists() else 0
+
+    def test_success_statuses(self):
+        for status in ("200", "409", "429"):
+            self.calls.unlink(missing_ok=True)
+            os.environ["FAKE_STATUS"] = status
+            self.sleeps.clear()
+            rc, out = self.run_main()
+            self.assertEqual(rc, 0)
+            self.assertEqual(self.n_posts(), 1, status)
+            self.assertNotIn(300, self.sleeps)  # no retry
+            self.assertIn("http=" + status, out)
+
+    def test_key_sent_by_header_not_argv_and_not_logged(self):
+        for status in ("200", "401", "403", "404", "500"):
+            os.environ["FAKE_STATUS"] = status
+            rc, out = self.run_main()
+            self.assertNotIn(KEY, out)
+            self.assertNotIn(KEY, self.args_log.read_text())
+        self.assertIn("x-ingest-key: " + KEY, self.stdin_log.read_text())
+        self.assertIn("content-type: application/json", self.stdin_log.read_text())
+        self.assertIn("--max-time 60", self.args_log.read_text())
+
+    def test_401_stops_uploading(self):
+        os.environ["FAKE_STATUS"] = "401"
+        rc, out = self.run_main(cycles=3)
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.n_posts(), 1)
+        self.assertIn("key rejected", out)
+
+    def test_404_and_403_wait_without_retry(self):
+        for status, msg in (("404", "endpoint not switched on"), ("403", "key rejected")):
+            self.calls.unlink(missing_ok=True)
+            os.environ["FAKE_STATUS"] = status
+            rc, out = self.run_main(cycles=2)
+            self.assertEqual(self.n_posts(), 2, status)  # one per interval, no extra retry
+            self.assertIn(msg, out)
+
+    def test_other_error_retries_once_after_five_minutes(self):
+        os.environ["FAKE_STATUS"] = "500"
+        self.run_main()
+        self.assertEqual(self.n_posts(), 2)
+        self.assertEqual(self.sleeps, [300])
+
+    def test_us_snapshot_not_uploaded(self):
+        self.body.write_text(json.dumps(US))
+        rc, out = self.run_main()
+        self.assertEqual(self.n_posts(), 0)
+        self.assertIn("not uploading", out)
+
+    def test_snapshot_failure_not_uploaded(self):
+        os.environ["SNAP_FAIL"] = "1"
+        rc, out = self.run_main()
+        self.assertEqual(self.n_posts(), 0)
+        self.assertIn("snapshot failed", out)
+
+    def test_run_on_start_false_waits_first(self):
+        Path(self.opts).write_text(json.dumps({"ingest_key": KEY, "interval_minutes": 45, "jitter_minutes": 0, "run_on_start": False}))
+        self.run_main()
+        self.assertEqual(self.sleeps, [45 * 60])
+
+    def test_short_key_refuses_to_start(self):
+        Path(self.opts).write_text(json.dumps({"ingest_key": "short"}))
+        rc, out = self.run_main()
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.n_posts(), 0)
+
+
+class StaticTests(unittest.TestCase):
+    def test_config_and_provenance(self):
+        d = ROOT / "pogo-store-reader"
+        cfg = (d / "config.yaml").read_text()
+        self.assertIn("ingest_key: password(32,)", cfg)
+        self.assertIn("interval_minutes: int(30,)", cfg)
+        self.assertNotIn("ingest_key:", cfg.split("schema:")[0])  # no default key
+        self.assertIn("playwright/python:v1.49.0", (d / "Dockerfile").read_text())
+        self.assertIn("1ff10302cc327a5fe65721924806a8b9e919cf3b", (d / "store_snapshot.py.source").read_text())
+
+
+if __name__ == "__main__":
+    unittest.main()
