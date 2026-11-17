@@ -1,10 +1,11 @@
 """Pokemon GO store reader: snapshot the AU web store, check it, upload it. Fails closed.
 
-Never logs the key or response bodies: only timestamps, item count, HTTP status, short reasons.
+Never logs the key or response bodies: only a redacted 5-line tail of a failed snapshot run, plus timestamps, item count, HTTP status, short reasons.
 """
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -58,8 +59,21 @@ def check_au(raw):
     return len(items), None
 
 
-def take_snapshot(path):
-    """Returns (raw_text, None) or (None, reason). Snapshot output is not logged (it can echo page text)."""
+def safe_tail(out, err, key="", lines=5, width=200):
+    """Last few non-empty lines of the snapshot's stderr then stdout, redacted and truncated for the log."""
+    text = (out or b"").decode("utf-8", "replace") + "\n" + (err or b"").decode("utf-8", "replace")
+    tail = []
+    for line in [l for l in text.splitlines() if l.strip()][-lines:]:
+        line = "".join(c if c.isprintable() else " " for c in line)
+        if key:
+            line = line.replace(key, "[redacted]")
+        line = re.sub(r"(?i)x-ingest-key[\s:=\"']*\S*", "[redacted]", line)
+        tail.append(line.strip()[:width])
+    return tail
+
+
+def take_snapshot(path, key=""):
+    """Returns (raw_text, None) or (None, reason). Only a redacted, truncated tail of a failed run's output is logged."""
     try:
         r = subprocess.run([sys.executable, SNAPSHOT_SCRIPT, path], capture_output=True, timeout=SNAPSHOT_TIMEOUT)
     except subprocess.TimeoutExpired:
@@ -67,6 +81,8 @@ def take_snapshot(path):
     except OSError:
         return None, "snapshot could not start"
     if r.returncode != 0:
+        for line in safe_tail(r.stdout, r.stderr, key):
+            log("snapshot output: " + line)
         return None, "snapshot failed (exit %d)" % r.returncode
     try:
         with open(path) as f:
@@ -92,7 +108,7 @@ def run_cycle(cfg):
     """One snapshot+upload. Returns 'ok', 'wait' (normal interval), 'retry', or 'stop' (key rejected)."""
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "s.json")
-        raw, why = take_snapshot(path)
+        raw, why = take_snapshot(path, cfg["key"])
         if why:
             log("not uploading: " + why)
             return "retry"

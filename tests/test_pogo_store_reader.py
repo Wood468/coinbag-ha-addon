@@ -48,13 +48,13 @@ class FlowTests(unittest.TestCase):
                         % (self.calls, self.args_log, self.stdin_log))
         curl.chmod(curl.stat().st_mode | stat.S_IEXEC)
         snap = t / "snap.py"
-        snap.write_text("import os,sys\nif os.environ.get('SNAP_FAIL'): sys.exit(3)\n"
+        snap.write_text("import os,sys\nif os.environ.get('SNAP_FAIL'):\n    print('noise'); [print('line%d' % i, file=sys.stderr) for i in range(8)]\n    print('boom ' + os.environ['SNAP_KEY'] + ' x-ingest-key: abc ' + 'z'*500, file=sys.stderr); sys.exit(3)\n"
                         "open(sys.argv[1],'w').write(open(os.environ['SNAP_BODY']).read())\n")
         opts = t / "options.json"
         opts.write_text(json.dumps({"ingest_key": KEY, "interval_minutes": 30, "jitter_minutes": 0, "run_on_start": True}))
         self.opts = str(opts)
         reader.CURL, reader.SNAPSHOT_SCRIPT = str(curl), str(snap)
-        os.environ.update(SNAP_BODY=str(self.body), FAKE_STATUS="200")
+        os.environ.update(SNAP_KEY=KEY, SNAP_BODY=str(self.body), FAKE_STATUS="200")
         os.environ.pop("SNAP_FAIL", None)
         self.sleeps = []
 
@@ -122,7 +122,12 @@ class FlowTests(unittest.TestCase):
         os.environ["SNAP_FAIL"] = "1"
         rc, out = self.run_main()
         self.assertEqual(self.n_posts(), 0)
-        self.assertIn("snapshot failed", out)
+        self.assertIn("snapshot failed (exit 3)", out)
+        self.assertIn("snapshot output: line7", out)
+        self.assertNotIn("line2", out)  # only the last 5 lines
+        self.assertNotIn(KEY, out)
+        self.assertNotIn("abc", out)
+        self.assertTrue(all(len(l) < 240 for l in out.splitlines()))
 
     def test_run_on_start_false_waits_first(self):
         Path(self.opts).write_text(json.dumps({"ingest_key": KEY, "interval_minutes": 45, "jitter_minutes": 0, "run_on_start": False}))
