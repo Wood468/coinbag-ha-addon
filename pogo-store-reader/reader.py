@@ -23,6 +23,17 @@ def log(msg):
     print("%s %s" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), msg), flush=True)
 
 
+def preflight():
+    """One log line: can the interpreter running the snapshot import Playwright? No secrets."""
+    try:
+        r = subprocess.run([sys.executable, "-c", "import playwright.sync_api"], capture_output=True, timeout=60)
+        ok = r.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        ok = False
+    log("preflight: python=%s playwright import %s" % (sys.executable, "ok" if ok else "FAILED"))
+    return ok
+
+
 def load_options(path=OPTIONS_PATH):
     with open(path) as f:
         o = json.load(f)
@@ -138,6 +149,7 @@ def main(options_path=OPTIONS_PATH, sleep=time.sleep, rand=random.uniform, max_c
         log("bad options: %s" % e)
         return 1
     log("started: interval=%dm jitter=%dm run_on_start=%s" % (cfg["interval"], cfg["jitter"], cfg["run_on_start"]))
+    preflight()
     cycles = 0
     first = True
     while max_cycles is None or cycles < max_cycles:
