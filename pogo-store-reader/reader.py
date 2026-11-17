@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.parse import urlsplit
 
 OPTIONS_PATH = os.environ.get("OPTIONS_PATH", "/data/options.json")
 SNAPSHOT_SCRIPT = os.environ.get("SNAPSHOT_SCRIPT", "/app/store_snapshot.py")
@@ -17,6 +18,11 @@ CURL = os.environ.get("CURL_BIN", "curl")
 RETRY_SECONDS = 300
 SNAPSHOT_TIMEOUT = 300
 MIN_KEY = 32
+MAX_BYTES = 256 * 1024
+MAX_ITEMS = 400
+IMG_ORIGIN = "https://assets.pgo.webstore.nianticlabs.com"  # mirrors the Worker; log-only here, the Worker decides
+HREF_RE = re.compile(r"^/purchase/[\w\-/?=&%.]*$")
+REASON_RE = re.compile(r"^[a-z_]{1,32}$")
 
 
 def log(msg):
@@ -70,6 +76,56 @@ def check_au(raw):
     return len(items), None
 
 
+def dry_check(raw):
+    """Cheap mirror of the Worker's shape rules. Returns a rule name (never content) or None. Advisory only."""
+    if len(raw.encode("utf-8", "replace")) > MAX_BYTES:
+        return "size_over_256kb"
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return "not_json"
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return "no_items_list"
+    if len(items) > MAX_ITEMS:
+        return "too_many_items"
+    if not isinstance(data.get("fetched"), str) or len(data["fetched"]) > 40:
+        return "fetched_bad"
+    for i in items:
+        if not isinstance(i, dict):
+            return "item_not_object"
+        for k in ("name", "section"):
+            if not isinstance(i.get(k), str) or not i[k].strip() or len(i[k]) > 200:
+                return "%s_bad" % k
+        if i.get("price") is not None and (not isinstance(i["price"], str) or len(i["price"]) > 200):
+            return "price_bad"
+        for k in ("tag", "limit", "left", "href"):
+            if i.get(k) is not None and (not isinstance(i[k], str) or len(i[k]) > 300):
+                return "%s_too_long" % k
+        if i.get("href") and not HREF_RE.match(i["href"]):
+            return "href_not_purchase_path"
+        imgs = i.get("imgs")
+        if imgs is not None:
+            if not isinstance(imgs, list) or len(imgs) > 6:
+                return "imgs_bad_or_over_6"
+            for u in imgs:
+                if not isinstance(u, str) or len(u) > 600:
+                    return "img_bad_or_long"
+                try:
+                    sp = urlsplit(u)
+                except ValueError:
+                    return "img_unparseable"
+                if sp.scheme != "https":
+                    return "img_not_https"
+                if "%s://%s" % (sp.scheme, sp.netloc) != IMG_ORIGIN:
+                    return "img_host"
+    comp = data.get("completeness")
+    if comp is not None and (not isinstance(comp, dict) or not isinstance(comp.get("sections"), list)
+                             or len(comp["sections"]) > 100):
+        return "completeness_bad"
+    return None
+
+
 def safe_tail(out, err, key="", lines=5, width=200):
     """Last few non-empty lines of the snapshot's stderr then stdout, redacted and truncated for the log."""
     text = (out or b"").decode("utf-8", "replace") + "\n" + (err or b"").decode("utf-8", "replace")
@@ -102,17 +158,31 @@ def take_snapshot(path, key=""):
         return None, "snapshot file missing"
 
 
+def read_reason(body_path):
+    """The Worker's fixed-vocabulary `reason` from a JSON error body, or None. Nothing else from the body is used."""
+    try:
+        with open(body_path, "rb") as f:
+            v = json.loads(f.read(4096).decode("utf-8", "replace"))
+        r = v.get("reason") if isinstance(v, dict) else None
+        return r if isinstance(r, str) and REASON_RE.match(r) else None
+    except (OSError, ValueError):
+        return None
+
+
 def post(cfg, path):
-    """POST the file with curl; the key goes via stdin config so it is not in argv. Returns the HTTP status (0 = no response)."""
+    """POST the file with curl; the key goes via stdin config so it is not in argv.
+    Returns (HTTP status (0 = no response), reason code or None for a non-2xx reply)."""
+    body_path = path + ".resp"
     conf = 'header = "x-ingest-key: %s"\nheader = "content-type: application/json"\n' % cfg["key"]
     try:
         r = subprocess.run(
-            [CURL, "-sS", "--max-time", "60", "-o", os.devnull, "-w", "%{http_code}", "-K", "-",
+            [CURL, "-sS", "--max-time", "60", "-o", body_path, "-w", "%{http_code}", "-K", "-",
              "--data-binary", "@" + path, cfg["url"]],
             input=conf.encode(), capture_output=True, timeout=90)
-        return int(r.stdout.decode().strip() or 0)
+        status = int(r.stdout.decode().strip() or 0)
     except (subprocess.TimeoutExpired, OSError, ValueError):
-        return 0
+        return 0, None
+    return status, (None if 200 <= status < 300 else read_reason(body_path))
 
 
 def run_cycle(cfg):
@@ -127,7 +197,10 @@ def run_cycle(cfg):
         if why:
             log("not uploading: %s (items=%d)" % (why, count))
             return "wait"
-        status = post(cfg, path)
+        rule = dry_check(raw)
+        if rule:
+            log("local check: would likely be rejected (rule=%s); uploading anyway so the server's reason is logged" % rule)
+        status, reason = post(cfg, path)
     if status in (200, 409, 429):
         log("uploaded: items=%d http=%d%s" % (count, status, "" if status == 200 else " (already have it)"))
         return "ok"
@@ -138,7 +211,7 @@ def run_cycle(cfg):
         log("http=%d %s; waiting for the next interval" % (
             status, "key rejected" if status == 403 else "endpoint not switched on"))
         return "wait"
-    log("upload failed: http=%d" % status)
+    log("upload failed: http=%d%s" % (status, " reason=" + reason if reason else ""))
     return "retry"
 
 
