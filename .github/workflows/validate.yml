@@ -39,3 +39,14 @@ jobs:
           PY
       - name: Build add-on container
         run: docker build --pull --tag coinbag-addon:test coinbag
+
+  reader-docker-chromium:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build actual Store Reader image (includes build-time Chromium launch)
+        run: docker build --pull --tag pogo-store-reader:ci pogo-store-reader
+      - name: Verify Chromium launches inside the built Reader container
+        run: |
+          docker run --rm --entrypoint python3 pogo-store-reader:ci -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); page = b.new_page(); page.goto("data:text/html,<title>Reader CI</title>"); assert page.title() == "Reader CI"; b.close(); p.stop()'
