@@ -31,7 +31,7 @@ def scroll_until_stable(read_sections, scroll, max_passes=MAX_PASSES, stable_nee
         scroll()
         passes += 1
         cur = read_sections()
-        stable = stable + 1 if cur == last else 0
+        stable = stable + 1 if cur and cur == last else 0
         last = cur
         if stable >= stable_needed:
             break
